@@ -11,7 +11,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config import INPUTS_PATH, OUTPUTS_PATH
 
 class PPADeficitMinimizer:
-    def __init__(self, max_capacity, min_capacity, max_charge_power, max_discharge_power, charge_efficiency, discharge_efficiency, initial_energy):
+    def __init__(self, max_capacity, min_capacity, max_charge_power, max_discharge_power, charge_efficiency, discharge_efficiency, initial_energy, capacity_poi):
         """
         Initialize PPA deficit minimizer with battery parameters.
         
@@ -31,6 +31,7 @@ class PPADeficitMinimizer:
         self.charge_efficiency = charge_efficiency
         self.discharge_efficiency = discharge_efficiency
         self.initial_energy = initial_energy
+        self.capacity_poi = capacity_poi
 
     def optimize_with_surplus_deficit(self, wind: list[float], solar: list[float], ppa: list[float]) -> dict:
         """
@@ -49,34 +50,27 @@ class PPADeficitMinimizer:
 
         model = pulp.LpProblem("PPA_Deficit_Minimization", pulp.LpMinimize)
 
-        if self.discharge_efficiency != 1:
-            self.max_discharge_power = self.max_discharge_power * self.discharge_efficiency
-        if self.charge_efficiency != 1:
-            self.max_charge_power = self.max_charge_power * self.charge_efficiency
-
         # Decision variables
         charge = pulp.LpVariable.dicts("charge", range(T), lowBound=0, upBound=self.max_charge_power)
         discharge = pulp.LpVariable.dicts("discharge", range(T), lowBound=0, upBound=self.max_discharge_power)
-        state_of_charge = pulp.LpVariable.dicts("state_of_charge", range(T), lowBound=self.min_capacity, upBound=self.max_capacity)
+        state_of_charge = pulp.LpVariable.dicts("state_of_charge", range(T), lowBound=0, upBound=self.max_capacity)  # Changed lowBound to 0
         surplus = pulp.LpVariable.dicts("surplus", range(T), lowBound=0)
         deficit = pulp.LpVariable.dicts("deficit", range(T), lowBound=0)
 
         # Objective: Minimize total absolute deviation
         model += pulp.lpSum(surplus[t] + deficit[t] for t in range(T))
 
-        # Constraints
+        # Constraints for the entire optimization period
         for t in range(T):
             supply = wind[t] + solar[t] + discharge[t] - charge[t]
-            model += supply - ppa[t] == surplus[t] - deficit[t]
-
-        if self.min_capacity > 0:
-            for t in range(1, T):
-                model += state_of_charge[t] >= self.min_capacity
+            model += (supply - ppa[t]) == (surplus[t] - deficit[t]), f"supply_deficit_balance_{t}"
 
         # Energy balance at the beginning of the optimization
-        model += state_of_charge[0] == self.initial_energy + self.charge_efficiency * charge[0] - (1 / self.discharge_efficiency) * discharge[0]
-        for t in range(1, T): # Energy balance for all hours except the first one
-            model += state_of_charge[t] == state_of_charge[t-1] + self.charge_efficiency * charge[t] - (1 / self.discharge_efficiency) * discharge[t]
+        model += (state_of_charge[0] == self.initial_energy + self.charge_efficiency * charge[0] - (1 / self.discharge_efficiency) * discharge[0]), f"energy_balance_t0"
+        # Energy balance for all hours except the first one
+        for t in range(1, T): 
+            model += (state_of_charge[t] == state_of_charge[t-1] + self.charge_efficiency * charge[t] - (1 / self.discharge_efficiency) * discharge[t]), f"energy_balance_t{t}"
+            model += (state_of_charge[t] >= self.min_capacity), f"min_capacity_constraint_t{t}"
 
         # Solve model
         model.solve()
@@ -93,70 +87,6 @@ class PPADeficitMinimizer:
         }
         return {'results': results}
 
-    def optimize_without_surplus_deficit(self, wind: list[float], solar: list[float], ppa: list[float]) -> dict:
-        """
-        Optimize battery charge/discharge to minimize deviation from PPA.
-        
-        Args:
-            wind: List of wind production [MW] per hour
-            solar: List of solar production [MW] per hour
-            ppa: List of PPA targets [MW] per hour
-            
-        Returns:
-            dict: Optimization results including charge, discharge, state_of_charge, surplus, and deficit.
-        """
-        T = len(ppa)
-        assert len(wind) == T and len(solar) == T, "Input series must have same length"
-
-        model = pulp.LpProblem("PPA_Surplus_Maximizer", pulp.LpMaximize)
-
-        if self.discharge_efficiency != 1:
-            self.max_discharge_power = self.max_discharge_power * self.discharge_efficiency
-        if self.charge_efficiency != 1:
-            self.max_charge_power = self.max_charge_power * self.charge_efficiency
-
-        # Decision variables
-        charge = pulp.LpVariable.dicts("charge", range(T), lowBound=0, upBound=self.max_charge_power)
-        discharge = pulp.LpVariable.dicts("discharge", range(T), lowBound=0, upBound=self.max_discharge_power)
-        state_of_charge = pulp.LpVariable.dicts("state_of_charge", range(T), lowBound=self.min_capacity, upBound=self.max_capacity)
-
-        # Compute deficit (PPA target minus renewables)
-        surplus = [ppa[t] - wind[t] - solar[t] for t in range(T)]
-
-        # Objective: Mainimize "surplus" to encourage matching PPA
-        model += pulp.lpSum((discharge[t] - charge[t]) * surplus[t] for t in range(T))
-
-    
-        # Energy balance at the beginning of the optimization
-        model += state_of_charge[0] == self.initial_energy + self.charge_efficiency * charge[0] - (1 / self.discharge_efficiency) * discharge[0]
-        for t in range(1, T): # Energy balance for all hours except the first one
-            model += state_of_charge[t] == state_of_charge[t-1] + self.charge_efficiency * charge[t] - (1 / self.discharge_efficiency) * discharge[t]
-
-        # Add constraint for state of charge >= min capacity for all t > 0
-        if self.min_capacity > 0:
-            for t in range(1, T):
-                model += state_of_charge[t] >= self.min_capacity
-
-        # Solve model
-        model.solve()
-
-        # Extract results
-        results = {
-            'charge': [charge[t].value() for t in range(T)],
-            'discharge': [discharge[t].value() for t in range(T)],
-            'state_of_charge': [state_of_charge[t].value() for t in range(T)],
-            'status': pulp.LpStatus[model.status],
-            'total_deviation': 0 #placeholder for now
-        }
-
-        # Compute surplus and deficit outside the model based on optimized supply
-        total_generation = [wind[t] + solar[t] + results['discharge'][t] - results['charge'][t] for t in range(T)]
-        results['surplus'] = [max(0, total_generation[t] - ppa[t]) for t in range(T)]
-        results['deficit'] = [max(0, ppa[t] - total_generation[t]) for t in range(T)]
-        results['total_deviation'] = sum(results['surplus']) + sum(results['deficit'])
-
-        return {'results': results}
-    
     def compute_deficits(self, results: dict, ppa: list[float], timestamps: list[datetime.datetime] = None) -> dict:
         """
         Compute hourly and monthly % deficits.
@@ -192,27 +122,74 @@ class PPADeficitMinimizer:
         
         return {'deficits': {'hourly': hourly, 'monthly': monthly['%_deficit'].to_dict()}}
 
-    def load_data(self):
+    def load_data(self, generate_ppa_profile: bool = False, baseload_mw: float = None):
         """
         Load data from the inputs folder.
         Assumes CSVs have a datetime column as the first column and a value column as the second.
+
+        Args:
+            generate_ppa_profile (bool): Whether to generate a baseload profile or use a specific PPA profile
+            baseload_mw (float): Constant baseload value in MW
         """
         PATHS = {
                 'wind_profile': f'{INPUTS_PATH}/wind_profile.csv',
                 'solar_profile': f'{INPUTS_PATH}/solar_profile.csv',
                 'ppa_profile': f'{INPUTS_PATH}/ppa_profile.csv',
             }
+
         
         wind_df = pd.read_csv(PATHS['wind_profile'])
         solar_df = pd.read_csv(PATHS['solar_profile'])
-        ppa_df = pd.read_csv(PATHS['ppa_profile'])
 
         self.wind_profile = wind_df.iloc[:, 1].tolist()
         self.solar_profile = solar_df.iloc[:, 1].tolist()
-        self.ppa_profile = ppa_df.iloc[:, 1].tolist()
+
+        if generate_ppa_profile:
+            self.ppa_profile = self.create_baseload_ppa(baseload_mw)
+        else:
+            ppa_df = pd.read_csv(PATHS['ppa_profile'])
+            self.ppa_profile = ppa_df.iloc[:, 1].tolist()
+
+        # Check if wind and solar profiles have the same length
+        length_wind = len(self.wind_profile)
+        length_solar = len(self.solar_profile)
+        length_ppa = len(self.ppa_profile)  
+        if length_wind != length_solar or length_wind != length_ppa or length_solar != length_ppa:
+            print(f"Length of wind profile: {length_wind}")
+            print(f"Length of solar profile: {length_solar}")
+            print(f"Length of PPA profile: {length_ppa}")
+            raise ValueError("Wind, solar, and PPA profiles must have the same length. Check the input files.")
+
+        else: 
+            self.timestamps = pd.to_datetime(wind_df.iloc[:, 0]).tolist()
+            
+    def create_baseload_ppa(self, baseload_mw):
+        """
+        Create a baseload PPA profile with constant value.
         
-        # Use timestamps from ppa_profile, assuming they are consistent across files
-        self.timestamps = pd.to_datetime(ppa_df.iloc[:, 0]).tolist()
+        Args:
+            baseload_mw (float): Constant baseload value in MW
+            
+        Returns:
+            list: PPA profile with constant baseload value
+            
+        Note:
+            This method requires wind and solar profiles to be loaded first
+            to determine the correct length of the PPA profile.
+        """
+        if not hasattr(self, 'wind_profile') or not hasattr(self, 'solar_profile'):
+            raise ValueError("Wind and solar profiles must be loaded first. Call load_data() before creating baseload PPA.")
+
+        if baseload_mw is None:
+            raise ValueError("Baseload value must be provided. Call load_data() with baseload_mw parameter, and a generate_ppa_profile=True flag.")
+        
+        # Use wind profile length to determine the size (could also use solar_profile)
+        profile_length = len(self.wind_profile)
+        
+        # Create baseload PPA profile
+        baseload_ppa = [baseload_mw] * profile_length
+            
+        return baseload_ppa
 
     def save_results(self, results: dict, deficits: dict):
         """
@@ -277,7 +254,6 @@ class PPADeficitMinimizer:
             df_summary = pd.DataFrame([summary_data])
             self._save_to_csv(df_summary, "results_summary.csv")
 
-
     def _save_to_csv(self, data, filename: str):
         """
         Helper to save data to CSV, handling lists, dicts, and pandas objects.
@@ -299,27 +275,26 @@ class PPADeficitMinimizer:
 
 def main():
     #variables
-    max_capacity = 40 * 0.8
-    min_capacity = 40 * 0.2
+    capacity = 40
+    max_soc = 0.8 #set to 1 for full capacity
+    min_soc = 0.2 #set to 0 for no minimum capacity
+    max_capacity = capacity * max_soc
+    min_capacity = capacity * min_soc
+    capacity_poi = 43.2
     max_charge_power = 9
     max_discharge_power = 9
     charge_efficiency = 0.85
     discharge_efficiency = 0.85
-    initial_energy = min_capacity
+    initial_energy = 0
 
-    with_surplus_deficit = False
 
 
     # Create minimizer
-    minimizer = PPADeficitMinimizer(max_capacity=max_capacity, min_capacity=min_capacity, max_charge_power=max_charge_power, max_discharge_power=max_discharge_power, charge_efficiency=charge_efficiency, discharge_efficiency=discharge_efficiency, initial_energy=initial_energy)
-    minimizer.load_data()
+    minimizer = PPADeficitMinimizer(max_capacity=max_capacity, min_capacity=min_capacity, max_charge_power=max_charge_power, max_discharge_power=max_discharge_power, charge_efficiency=charge_efficiency, discharge_efficiency=discharge_efficiency, initial_energy=initial_energy, capacity_poi=capacity_poi)
+    minimizer.load_data(generate_ppa_profile=True, baseload_mw=10)
 
-    if with_surplus_deficit:
-        # Optimize
-        results = minimizer.optimize_with_surplus_deficit(minimizer.wind_profile, minimizer.solar_profile, minimizer.ppa_profile)
-    else:
-        # Optimize
-        results = minimizer.optimize_without_surplus_deficit(minimizer.wind_profile, minimizer.solar_profile, minimizer.ppa_profile)
+    
+    results = minimizer.optimize_with_surplus_deficit(minimizer.wind_profile, minimizer.solar_profile, minimizer.ppa_profile)
 
     deficits = minimizer.compute_deficits(results['results'], minimizer.ppa_profile, minimizer.timestamps)
 
