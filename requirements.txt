@@ -1,3 +1,0 @@
-pulp
-pandas
-numpy
