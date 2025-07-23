@@ -5,6 +5,9 @@ import sys
 from pathlib import Path
 import datetime
 import pretty_errors
+import glob
+import os
+import openpyxl
 
 # Add parent directory to path to import config
 sys.path.append(str(Path(__file__).parent.parent))
@@ -191,7 +194,7 @@ class PPADeficitMinimizer:
             
         return baseload_ppa
 
-    def save_results(self, results: dict, deficits: dict):
+    def save_results(self, results: dict, deficits: dict, save_as_csv: bool = True, save_as_excel: bool = False):
         """
         Save results and deficits to the outputs folder.
         - A consolidated hourly time-series is saved to consolidated_results_hourly.csv.
@@ -224,14 +227,16 @@ class PPADeficitMinimizer:
             'state_of_charge': 'soc',
         })
 
+        df_hourly['net_charge'] = df_hourly['charge'] - df_hourly['discharge']
+
         # Select and order columns for the final hourly CSV
         final_hourly_cols = [
-            'timestamp', 'wind', 'solar_pv', 'ppa_profile', 'soc', 
-            'charge', 'discharge', 'deficit', '%_deficit'
+            'timestamp', 'wind', 'solar_pv', 'ppa_profile', 'soc',  'charge', 'discharge',
+            'net_charge', 'deficit', '%_deficit'
         ]
         # Filter to only include columns that exist
         final_hourly_cols = [col for col in final_hourly_cols if col in df_hourly.columns]
-        df_hourly_final = df_hourly[final_hourly_cols].copy()  # <-- Make a copy to avoid SettingWithCopyWarning
+        df_hourly_final = df_hourly[final_hourly_cols].copy()
 
         # Round numeric columns to 4 decimal places
         for col in df_hourly_final.columns:
@@ -239,20 +244,35 @@ class PPADeficitMinimizer:
                 df_hourly_final.loc[:, col] = df_hourly_final[col].round(4)
         
         df_hourly_final.loc[:, 'timestamp'] = pd.to_datetime(df_hourly_final['timestamp'])
+
+        avg_ppa_profile = str(int(round(np.mean(self.ppa_profile))))
         
-        self._save_to_csv(df_hourly_final, "consolidated_results_hourly.csv")
+        self._save_to_csv(df_hourly_final, f"consolidated_results_hourly_{avg_ppa_profile}MW.csv")
 
         # Create and save monthly summary
         numeric_cols = [col for col in df_hourly_final.columns if col != 'timestamp']
-        df_monthly_summary = df_hourly_final.set_index('timestamp')[numeric_cols].resample('ME').mean().round(4)  # <-- Use 'ME' instead of 'M'
-        
-        self._save_to_csv(df_monthly_summary, "consolidated_results_monthly.csv")
+        df_monthly_summary = df_hourly_final.set_index('timestamp')[numeric_cols].resample('ME').mean().round(4)
 
         # Save summary data (non-timeseries results)
         summary_data = {k: v for k, v in results_data.items() if not isinstance(v, list)}
         if summary_data:
             df_summary = pd.DataFrame([summary_data])
-            self._save_to_csv(df_summary, "results_summary.csv")
+            if save_as_csv:
+                self._save_to_csv(df_summary, f"results_summary_{avg_ppa_profile}MW.csv")
+            if save_as_excel:
+                self._save_to_excel(df_summary, avg_ppa_profile)
+   
+    def _save_to_excel(self, df_hourly_final, avg_ppa_profile):
+        """
+        Save individual results to Excel (for single baseload case).
+        """
+        excel_path = f"{OUTPUTS_PATH}/results_baseload_{avg_ppa_profile}MW.xlsx"
+        
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            sheet_name = f"Baseload {avg_ppa_profile}MW"
+            df_hourly_final.to_excel(writer, sheet_name=sheet_name, index=False)
+        
+        print(f"Excel file saved: {excel_path}")
 
     def _save_to_csv(self, data, filename: str):
         """
@@ -273,7 +293,42 @@ class PPADeficitMinimizer:
             df = pd.DataFrame(data)
             df.to_csv(path, index=False)
 
-def main():
+    @staticmethod
+    def consolidate_all_to_excel(excel_filename: str = "consolidated_baseload_results.xlsx"):
+        """
+        Consolidate all existing hourly CSV files in outputs folder into a single Excel file.
+        Each CSV becomes a sheet named 'Baseload XMW' where X is the average PPA value.
+        """
+        # Get all consolidated_results_hourly CSV files
+        csv_pattern = f"{OUTPUTS_PATH}/consolidated_results_hourly_*MW.csv"
+        csv_files = glob.glob(csv_pattern)
+        
+        if not csv_files:
+            print("No consolidated hourly CSV files found in outputs folder.")
+            return
+        
+        excel_path = f"{OUTPUTS_PATH}/{excel_filename}"
+        
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            for csv_file in sorted(csv_files):
+                # Extract baseload value from filename
+                filename = os.path.basename(csv_file)
+                # Extract MW value from filename like "consolidated_results_hourly_15MW.csv"
+                baseload_mw = filename.split('_')[-1].replace('MW.csv', '')
+                
+                # Read CSV
+                df = pd.read_csv(csv_file)
+                
+                # Create sheet name
+                sheet_name = f"Baseload {baseload_mw}MW"
+                
+                # Write to Excel sheet
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                print(f"Added sheet: {sheet_name}")
+        
+        print(f"Consolidated Excel file saved: {excel_path}")
+
+def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True):
     #variables
     capacity = 40
     max_soc = 0.8 #set to 1 for full capacity
@@ -286,25 +341,26 @@ def main():
     charge_efficiency = 0.85
     discharge_efficiency = 0.85
     initial_energy = 0
-
-
-
-    # Create minimizer
-    minimizer = PPADeficitMinimizer(max_capacity=max_capacity, min_capacity=min_capacity, max_charge_power=max_charge_power, max_discharge_power=max_discharge_power, charge_efficiency=charge_efficiency, discharge_efficiency=discharge_efficiency, initial_energy=initial_energy, capacity_poi=capacity_poi)
-    minimizer.load_data(generate_ppa_profile=True, baseload_mw=10)
-
     
-    results = minimizer.optimize_with_surplus_deficit(minimizer.wind_profile, minimizer.solar_profile, minimizer.ppa_profile)
+    # Load data variables
+    generate_ppa_profile = True
+   
+    for baseload_mw in baseload_mw_list:
+            # Create minimizer
+            minimizer = PPADeficitMinimizer(max_capacity=max_capacity, min_capacity=min_capacity, max_charge_power=max_charge_power, max_discharge_power=max_discharge_power, charge_efficiency=charge_efficiency, discharge_efficiency=discharge_efficiency, initial_energy=initial_energy, capacity_poi=capacity_poi)
+            minimizer.load_data(generate_ppa_profile, baseload_mw)
 
-    deficits = minimizer.compute_deficits(results['results'], minimizer.ppa_profile, minimizer.timestamps)
+            results = minimizer.optimize_with_surplus_deficit(minimizer.wind_profile, minimizer.solar_profile, minimizer.ppa_profile)
 
-    # Save results
-    minimizer.save_results(results=results, deficits=deficits)
+            deficits = minimizer.compute_deficits(results['results'], minimizer.ppa_profile, minimizer.timestamps)
+
+            # Save results
+            minimizer.save_results(results=results, deficits=deficits, save_as_csv=True, save_as_excel=False)
+
+    # After all baseloads are processed, consolidate to Excel
+    if consolidate_excel and baseload_mw_list:
+        PPADeficitMinimizer.consolidate_all_to_excel()
 
 if __name__ == "__main__":
-    main()
-
-# Example usage (comment out or adapt as needed):
-# minimizer = PPADeficitMinimizer(max_capacity=20, min_capacity=0, max_charge_power=5, max_discharge_power=5, charge_efficiency=0.9, discharge_efficiency=0.9)
-# results = minimizer.optimize(wind_list, solar_list, ppa_list)
-# deficits = minimizer.compute_deficits(results, ppa_list, timestamp_list)
+    main_baseload(baseload_mw_list=[15, 20, 25, 30, 35, 40], consolidate_excel=True)
+    
