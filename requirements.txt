@@ -3,3 +3,6 @@ openpyxl
 pandas
 numpy   
 pyomo
+matplotlib
+windpowerlib
+requests

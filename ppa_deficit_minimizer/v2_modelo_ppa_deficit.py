@@ -12,6 +12,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config import INPUTS_PATH, OUTPUTS_PATH
 
 class PPADeficitMinimizer:
+    
     def __init__(self, max_capacity, min_capacity, max_charge_power, max_discharge_power, charge_efficiency, discharge_efficiency, initial_energy, capacity_poi):
         """
         Initialize ppa_deficit minimizer for a hybrid system with wind and solar generation.
@@ -370,10 +371,17 @@ class PPADeficitMinimizer:
         df_hourly = df_hourly.rename(columns={'state_of_charge': 'soc'})
         df_hourly['net_charge'] = df_hourly['charge'] - df_hourly['discharge']
 
+        df_hourly['vertido_before'] = df_hourly['wind'] + df_hourly['solar_pv'] - self.capacity_poi
+        df_hourly['vertido_before'] = df_hourly['vertido_before'].clip(lower=0)
+        df_hourly['vertido_after'] = df_hourly['vertido_before'] + df_hourly['net_charge']
+        df_hourly['vertido_after'] = df_hourly['vertido_after'].clip(lower=0)
+
+        df_hourly['total_generation'] = df_hourly['wind'] + df_hourly['solar_pv'] + df_hourly['net_charge']
+
         # Select columns
         final_hourly_cols = [
-            'datetime', 'wind', 'solar_pv', 'ppa_profile', 'soc',
-            'net_charge', 'ppa_deficit', 'curtailment', '%_deficit', 'total_ppa_deficit', 'total_grid_injection'
+            'datetime', 'wind', 'solar_pv', 'ppa_profile', 'vertido_before',  'soc', 
+            'net_charge', "total_generation", 'vertido_after', 'ppa_deficit', 'curtailment', '%_deficit', 'total_ppa_deficit', 'total_grid_injection'
         ]
         final_hourly_cols = [col for col in final_hourly_cols if col in df_hourly.columns]
         df_hourly_final = df_hourly[final_hourly_cols].copy()
@@ -547,7 +555,7 @@ class PPADeficitMinimizer:
         
         print(f"Consolidated Excel file saved: {excel_path}")
 
-def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True, start_date: str = None, end_date: str = None, verbose: bool = True):
+def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True, start_date: str = None, end_date: str = None, verbose: bool = True, generate_ppa_profile: bool = True):
     # Variables
     capacity = 40
     max_soc = 0.95  # Set to 1 for full capacity
@@ -596,4 +604,4 @@ def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True,
         PPADeficitMinimizer.consolidate_all_to_excel()
 
 if __name__ == "__main__":
-    main_baseload(baseload_mw_list=[15], consolidate_excel=False, start_date='2000-01-01', end_date='2000-12-31', verbose=True)
+    main_baseload(baseload_mw_list=[5, 10, 15], consolidate_excel=True, start_date='2000-01-01', end_date='2000-12-31', verbose=False)
