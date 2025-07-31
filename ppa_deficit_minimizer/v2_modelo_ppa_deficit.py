@@ -6,6 +6,7 @@ from pathlib import Path
 import datetime
 import glob
 import os
+import calendar
 
 # Add parent directory to path to import config
 sys.path.append(str(Path(__file__).parent.parent))
@@ -272,6 +273,7 @@ class PPADeficitMinimizer:
                 df = pd.read_csv(path)
                 df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
                 df['datetime'] = pd.to_datetime(df['datetime'])
+                df['datetime'] = df['datetime'].dt.floor('H') #extract hour
                 return df
             print(f"Info: '{os.path.basename(path)}' not found. Assuming zero generation for this source.")
             return None
@@ -285,11 +287,17 @@ class PPADeficitMinimizer:
         # Filter by date
         if start_date and end_date:
             start = pd.to_datetime(start_date)
-            end = pd.to_datetime(end_date)
+            # Add a day to end_date to include all hours of the last day.
+            end = pd.to_datetime(end_date) + pd.Timedelta(days=1)
             if wind_df is not None:
-                wind_df = wind_df[(wind_df['datetime'] >= start) & (wind_df['datetime'] <= end)].reset_index(drop=True)
+                wind_df = wind_df[(wind_df['datetime'] >= start) & (wind_df['datetime'] < end)].reset_index(drop=True)
             if solar_df is not None:
-                solar_df = solar_df[(solar_df['datetime'] >= start) & (solar_df['datetime'] <= end)].reset_index(drop=True)
+                solar_df = solar_df[(solar_df['datetime'] >= start) & (solar_df['datetime'] < end)].reset_index(drop=True)
+
+        if wind_df is not None:
+            self.check_complete_years(wind_df, 'wind')
+        if solar_df is not None:
+            self.check_complete_years(solar_df, 'solar')
 
         if wind_df is not None and solar_df is not None and len(wind_df) != len(solar_df):
             raise ValueError("Wind and solar profiles have different lengths after date filtering. Please check input files.")
@@ -350,6 +358,53 @@ class PPADeficitMinimizer:
             raise ValueError("Baseload value must be provided when generating a PPA profile.")
         
         return [baseload_mw] * profile_length
+
+    def check_complete_years(self, df, profile_name):
+        """
+        Checks if the data for each month in each year is complete (has the correct number of hours).
+        Warns if any hours are missing and lists the missing hours.
+
+        Args:
+            df (pd.DataFrame): DataFrame with a 'datetime' column.
+            profile_name (str): Name of the profile being checked (e.g., 'wind', 'solar').
+        """
+        if df is None or df.empty:
+            return
+
+        df['year'] = df['datetime'].dt.year
+        df['month'] = df['datetime'].dt.month
+
+        # Group by year and month and count the hours
+        hourly_counts = df.groupby(['year', 'month']).size().reset_index(name='hours')
+
+        for _, row in hourly_counts.iterrows():
+            year, month, actual_hours = int(row['year']), int(row['month']), int(row['hours'])
+            
+            # Get the number of days in the month, accounting for leap years
+            days_in_month = calendar.monthrange(year, month)[1]
+            expected_hours = days_in_month * 24
+            
+            if actual_hours < expected_hours:
+                missing_hours = expected_hours - actual_hours
+                print(f"Warning: In '{profile_name}' profile, for {year}-{month:02d}, there are {missing_hours} missing hours. "
+                      f"Expected {expected_hours}, but found {actual_hours}.")
+
+                # Find missing hours
+                # Create a set of all expected datetimes for this month
+                start = pd.Timestamp(year=year, month=month, day=1, hour=0)
+                end = pd.Timestamp(year=year, month=month, day=days_in_month, hour=23)
+                all_hours = pd.date_range(start=start, end=end, freq='H')
+                # Get the datetimes present in the DataFrame for this year/month
+                present_hours = set(df[(df['year'] == year) & (df['month'] == month)]['datetime'])
+                # Find missing datetimes
+                missing_datetimes = sorted(list(set(all_hours) - present_hours))
+                if missing_datetimes:
+                    print(f"  Missing hours for {year}-{month:02d}:")
+                    for dt in missing_datetimes:
+                        print(f"    - {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Clean up columns added
+        df.drop(columns=['year', 'month'], inplace=True)
 
     def save_results(self, results: dict, deficits: dict):
         """
