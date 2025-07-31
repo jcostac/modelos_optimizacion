@@ -52,6 +52,18 @@ class PPADeficitMinimizer:
         T = len(ppa)
         assert len(wind) == T and len(solar) == T, "Input series must have same length"
 
+        def _clean_data(data_list: list[float], name: str) -> list[float]:
+            """Replaces NaNs with 0.0 and prints a warning."""
+            nan_count = sum(1 for x in data_list if pd.isna(x))
+            if nan_count > 0:
+                print(f"Warning: Found and replaced {nan_count} NaN value(s) with 0 in '{name}' data.")
+                return [0.0 if pd.isna(x) else x for x in data_list]
+            return data_list
+
+        wind = _clean_data(wind, 'wind')
+        solar = _clean_data(solar, 'solar')
+        ppa = _clean_data(ppa, 'ppa')
+
         if verbose:
             self.print_model_info(wind, solar, ppa)
 
@@ -59,25 +71,25 @@ class PPADeficitMinimizer:
         model.T = pyo.RangeSet(0, T - 1)
 
         # Parameters
-        model.W = pyo.Param(model.T, initialize=dict(enumerate(wind)), doc='Wind production [MW]')
-        model.S = pyo.Param(model.T, initialize=dict(enumerate(solar)), doc='Solar production [MW]')
-        model.PPA = pyo.Param(model.T, initialize=dict(enumerate(ppa)), doc='PPA profile [MW]')
-        model.P_grid_max = pyo.Param(initialize=self.capacity_poi, doc='Max grid injection limit [MW]')
-        model.P_chg_max = pyo.Param(initialize=self.max_charge_power, doc='Max charge power [MW]')
-        model.P_dis_max = pyo.Param(initialize=self.max_discharge_power, doc='Max discharge power [MW]')
-        model.eta_c = pyo.Param(initialize=self.charge_efficiency, doc='Charge efficiency')
-        model.eta_d = pyo.Param(initialize=self.discharge_efficiency, doc='Discharge efficiency')
-        model.SoC_min = pyo.Param(initialize=self.min_capacity, doc='Min state-of-charge [MWh]')
-        model.SoC_max = pyo.Param(initialize=self.max_capacity, doc='Max state-of-charge [MWh]')
-        model.SoC_0 = pyo.Param(initialize=self.initial_energy, doc='Initial state-of-charge [MWh]')
-        model.Delta_t = pyo.Param(initialize=1, doc='Time step [h]') #used to convert charge and discharge rates in MW to energy rates in MWh
+        model.W = pyo.Param(model.T, initialize=dict(enumerate(wind)), within=pyo.NonNegativeReals, doc='Wind production [MW]')
+        model.S = pyo.Param(model.T, initialize=dict(enumerate(solar)), within=pyo.NonNegativeReals, doc='Solar production [MW]')
+        model.PPA = pyo.Param(model.T, initialize=dict(enumerate(ppa)), within=pyo.NonNegativeReals, doc='PPA profile [MW]')
+        model.P_grid_max = pyo.Param(initialize=self.capacity_poi, within=pyo.NonNegativeReals, doc='Max grid injection limit [MW]')
+        model.P_chg_max = pyo.Param(initialize=self.max_charge_power, within=pyo.NonNegativeReals, doc='Max charge power [MW]')
+        model.P_dis_max = pyo.Param(initialize=self.max_discharge_power, within=pyo.NonNegativeReals, doc='Max discharge power [MW]')
+        model.eta_c = pyo.Param(initialize=self.charge_efficiency, within=pyo.NonNegativeReals, doc='Charge efficiency')
+        model.eta_d = pyo.Param(initialize=self.discharge_efficiency, within=pyo.NonNegativeReals, doc='Discharge efficiency')
+        model.SoC_min = pyo.Param(initialize=self.min_capacity, within=pyo.NonNegativeReals, doc='Min state-of-charge [MWh]')
+        model.SoC_max = pyo.Param(initialize=self.max_capacity, within=pyo.NonNegativeReals, doc='Max state-of-charge [MWh]')
+        model.SoC_0 = pyo.Param(initialize=self.initial_energy, within=pyo.NonNegativeReals, doc='Initial state-of-charge [MWh]')
+        model.Delta_t = pyo.Param(initialize=1, within=pyo.NonNegativeReals, doc='Time step [h]') #used to convert charge and discharge rates in MW to energy rates in MWh
 
         # Decision variables
-        model.c = pyo.Var(model.T, bounds=(0, self.max_charge_power), doc='Charge power [MW]')
-        model.d = pyo.Var(model.T, bounds=(0, self.max_discharge_power), doc='Discharge power [MW]')
-        model.SoC = pyo.Var(model.T, within=pyo.NonNegativeReals, doc='State-of-charge [MWh]')
-        model.uPPA = pyo.Var(model.T, bounds=(0, None), doc='Unmet PPA [MW]')
-        model.curt = pyo.Var(model.T, bounds=(0, None), doc='Curtailment [MW]')
+        model.c = pyo.Var(model.T, bounds=(0, self.max_charge_power), within=pyo.NonNegativeReals, doc='Charge power [MW]')
+        model.d = pyo.Var(model.T, bounds=(0, self.max_discharge_power), within=pyo.NonNegativeReals, doc='Discharge power [MW]')
+        model.SoC = pyo.Var(model.T, within=pyo.NonNegativeReals, doc='State-of-charge [MWh]')  
+        model.uPPA = pyo.Var(model.T, bounds=(0, None), within=pyo.NonNegativeReals, doc='Unmet PPA [MW]')
+        model.curt = pyo.Var(model.T, bounds=(0, None), within=pyo.NonNegativeReals, doc='Curtailment [MW]')
 
         # Constraints
         def soc_dynamics_rule(m, t):
@@ -604,4 +616,6 @@ def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True,
         PPADeficitMinimizer.consolidate_all_to_excel()
 
 if __name__ == "__main__":
-    main_baseload(baseload_mw_list=[5, 10, 15], consolidate_excel=True, start_date='2000-01-01', end_date='2000-12-31', verbose=False)
+    main_baseload(baseload_mw_list=[5, 10, 15], consolidate_excel=True, start_date='2004-01-01', end_date='2004-12-31', verbose=False)
+
+    
