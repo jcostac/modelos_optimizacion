@@ -86,7 +86,7 @@ class PPADeficitMinimizer:
         if timestamps is not None:
             self._validate_granularity(timestamps, pyo.value(model.Delta_t), verbose=verbose)
         
-        # Pre-calculate degraded capacity values
+        # Pre-calculate dict of degraded capacity values (year -> degraded capacity)
         soc_max_values = self._calculate_degraded_capacity(timestamps, T)
 
         #time-dependent parameters
