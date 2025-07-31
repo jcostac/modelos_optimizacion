@@ -37,6 +37,7 @@ class PPADeficitMinimizer:
         self.initial_energy = initial_energy
         self.capacity_poi = capacity_poi 
         self.battery_degradation_factor = battery_degradation_factor
+        self.battery_degradation_profile = None
 
     def optimize(self, wind: list[float], solar: list[float], ppa: list[float], timestamps: list[datetime.datetime] = None, verbose: bool = False) -> dict:
         """
@@ -222,32 +223,56 @@ class PPADeficitMinimizer:
         Returns:
             dict: Mapping of time step (year) to degraded capacity ie {0: 100, 1: 99, 2: 98, ...}
         """
-        if self.battery_degradation_factor == 0.0:
-            return {t: self.max_capacity for t in range(T)}
+        if self.battery_degradation_profile is not None:
+            if timestamps is None:
+                raise ValueError("Timestamps must be provided when using degradation profile.")
 
-        if self.battery_degradation_factor > 0.0 and not timestamps:
-            raise ValueError("Timestamps must be provided for battery degradation.")
+            timestamps_pd = pd.to_datetime(timestamps)
+            if len(timestamps_pd) != T:
+                raise ValueError("Timestamps must match the length of input data.")
 
-        if len(timestamps) != T:
-            raise ValueError("Timestamps must match the length of input data.")
+            years = timestamps_pd.year
+            start_year = years.min()
 
-        timestamps_pd = pd.to_datetime(timestamps)
-        years = timestamps_pd.year
-        start_year = years.min()
+            # Get the last year in profile for defaulting beyond range
+            if self.battery_degradation_profile:
+                last_year = max(self.battery_degradation_profile.keys())
+                default_remaining = self.battery_degradation_profile[last_year]
+            else:
+                default_remaining = 1.0
 
-        # Create a mapping from year to degradation factor
-        degradation_map = {
-            year: (1 - self.battery_degradation_factor) ** (year - start_year)
-            for year in years.unique()
-        }
-
-        # Create the final dictionary mapping each time step `t` to its degraded capacity
-        degraded_capacity_dict = {
-            t: self.max_capacity * degradation_map[years[t]]
-            for t in range(T)
-        }
+            soc_max_values = {}
+            for t in range(T):
+                relative_year = years[t] - start_year + 1
+                remaining = self.battery_degradation_profile.get(relative_year, default_remaining)
+                soc_max_values[t] = self.max_capacity * remaining
+            return soc_max_values
         
-        return degraded_capacity_dict
+        else:
+            if self.battery_degradation_factor is None or self.battery_degradation_factor == 0.0:
+                return {t: self.max_capacity for t in range(T)}
+
+            if not timestamps:
+                raise ValueError("Timestamps must be provided for battery degradation.")
+
+            timestamps_pd = pd.to_datetime(timestamps)
+            if len(timestamps_pd) != T:
+                raise ValueError("Timestamps must match the length of input data.")
+
+            years = timestamps_pd.year
+            start_year = years.min()
+
+            degradation_map = {
+                year: (1 - self.battery_degradation_factor) ** (year - start_year)
+                for year in years.unique()
+            }
+
+            degraded_capacity_dict = {
+                t: self.max_capacity * degradation_map[years[t]]
+                for t in range(T)
+            }
+            
+            return degraded_capacity_dict
 
     def _validate_granularity(self, timestamps, delta_t_hours, verbose=False):
         """
@@ -352,7 +377,7 @@ class PPADeficitMinimizer:
         
         return {'deficits': {'hourly': hourly, 'monthly': monthly['%_deficit'].to_dict()}}
 
-    def load_data(self, generate_ppa_profile: bool = False, baseload_mw: float = None, start_date: str = None, end_date: str = None, verbose=False):
+    def load_data(self, generate_ppa_profile: bool = False, baseload_mw: float = None, start_date: str = None, end_date: str = None, transformer_losses: float = 0, verbose=False):
         """
         Load data from the inputs folder. Can handle missing wind or solar profiles.
         Assumes CSVs have a datetime column as the first column and a value column as the second.
@@ -391,17 +416,13 @@ class PPADeficitMinimizer:
             start = pd.to_datetime(start_date)
             # Add a day to end_date to include all hours of the last day.
             end = pd.to_datetime(end_date) + pd.Timedelta(days=1)
-            if wind_df is not None:
-                wind_df = wind_df[(wind_df['datetime'] >= start) & (wind_df['datetime'] < end)].reset_index(drop=True)
-            if solar_df is not None:
-                solar_df = solar_df[(solar_df['datetime'] >= start) & (solar_df['datetime'] < end)].reset_index(drop=True)
+            wind_df = wind_df[(wind_df['datetime'] >= start) & (wind_df['datetime'] < end)].reset_index(drop=True)
+            solar_df = solar_df[(solar_df['datetime'] >= start) & (solar_df['datetime'] < end)].reset_index(drop=True)
 
-        if wind_df is not None:
-            self.check_complete_years(wind_df, 'wind', verbose=verbose)
-        if solar_df is not None:
-            self.check_complete_years(solar_df, 'solar', verbose=verbose)
+        self.check_complete_years(wind_df, 'wind', verbose=verbose)
+        self.check_complete_years(solar_df, 'solar', verbose=verbose)
 
-        if wind_df is not None and solar_df is not None and len(wind_df) != len(solar_df):
+        if len(wind_df) != len(solar_df):
             raise ValueError("Wind and solar profiles have different lengths after date filtering. Please check input files.")
 
         ref_df = wind_df if wind_df is not None else solar_df
@@ -421,6 +442,9 @@ class PPADeficitMinimizer:
                 raise FileNotFoundError(f"PPA profile not found at {PATHS['ppa_profile']}. To generate a baseload profile, set generate_ppa_profile=True.")
             
             ppa_df = _load_profile(PATHS['ppa_profile'])
+
+            if transformer_losses > 0 and transformer_losses is not None:
+                ppa_df.iloc[:, 1] = ppa_df.iloc[:, 1] + (1*transformer_losses)
             
             # Align PPA with generation data timestamps
             ppa_df = ppa_df.set_index('datetime').reindex(ref_df['datetime']).reset_index()
@@ -439,6 +463,35 @@ class PPADeficitMinimizer:
             print(f"Length of solar profile: {length_solar}")
             print(f"Length of PPA profile: {length_ppa}")
             raise ValueError("Wind, solar, and PPA profiles must have the same length after processing.")
+
+        # Load battery degradation profile if available
+        degradation_path = f'{INPUTS_PATH}/battery_degradation_profile.csv'
+        if self.battery_degradation_factor:
+            raise ValueError("Cannot use both fixed battery_degradation_factor and degradation profile file.")
+
+        if os.path.exists(degradation_path):
+            df_deg = pd.read_csv(degradation_path)
+            # Use first column as year, second as degradation factor
+            year_col = df_deg.columns[0]
+            deg_col = df_deg.columns[1]
+            # Clean degradation factor: remove %, strip, handle blanks/dashes, convert to numeric
+            df_deg[deg_col] = df_deg[deg_col].astype(str).str.replace('%', '').str.strip()
+            # Treat '0%' as '-' (missing value)
+            df_deg[deg_col] = df_deg[deg_col].replace('0', '-')
+            df_deg[deg_col] = df_deg[deg_col].replace(['-', ' - ', ''], np.nan)
+            df_deg[deg_col] = pd.to_numeric(df_deg[deg_col], errors='coerce')
+            # If any value > 1, treat as percent and convert to fraction
+            if not df_deg[deg_col].dropna().empty and df_deg[deg_col].max() > 1:
+                df_deg[deg_col] = df_deg[deg_col] / 100
+            # Forward fill and fill remaining NaNs with 1.0
+            df_deg[deg_col] = df_deg[deg_col].ffill().fillna(1.0)
+            # Ensure years are integers
+            df_deg[year_col] = df_deg[year_col].astype(int)
+            self.battery_degradation_profile = dict(zip(df_deg[year_col], df_deg[deg_col]))
+            print(f"Loaded battery degradation profile with {len(self.battery_degradation_profile)} entries.")
+        else:
+            print("Please provide a degradation profile file with name 'battery_degradation_profile.csv' and a column 'year' and 'degradation_factor' as  precentage in the inputs folder or set battery_degradation_factor (as a decimal).")
+            raise ValueError("No battery degradation profile found.")
 
         self.timestamps = ref_df['datetime'].tolist()
 
@@ -541,6 +594,7 @@ class PPADeficitMinimizer:
         df_hourly = df_hourly.rename(columns={'state_of_charge': 'soc'})
         df_hourly['net_charge'] = df_hourly['charge'] - df_hourly['discharge']
 
+        df_hourly['wind + pv'] = df_hourly['wind'] + df_hourly['solar_pv']
         df_hourly['vertido_before'] = df_hourly['wind'] + df_hourly['solar_pv'] - self.capacity_poi
         df_hourly['vertido_before'] = df_hourly['vertido_before'].clip(lower=0)
         df_hourly['vertido_after'] = df_hourly['vertido_before'] + df_hourly['net_charge']
@@ -726,7 +780,26 @@ class PPADeficitMinimizer:
         print(f"Consolidated Excel file saved: {excel_path}")
 
 def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True, start_date: str = None, end_date: str = None, verbose: bool = True, generate_ppa_profile: bool = True):
-    # Variables
+    """
+   Run the PPA Deficit Minimizer for a list of baseload MW values.
+
+   For each baseload value in baseload_mw_list, this function:
+       - Sets up the battery and system parameters.
+       - Loads wind, solar, and PPA profiles (or generates a baseload PPA profile).
+       - Runs the optimization to minimize PPA deficits.
+       - Computes hourly and monthly deficits.
+       - Saves results to CSV files in the outputs folder.
+       - Optionally prints progress and summary information.
+
+   Args:
+       baseload_mw_list (list[float]): List of baseload MW values to process.
+       consolidate_excel (bool): If True, consolidates all hourly results into a single Excel file at the end.
+       start_date (str): Optional start date for filtering input data (format 'YYYY-MM-DD').
+       end_date (str): Optional end date for filtering input data (format 'YYYY-MM-DD').
+       verbose (bool): If True, prints progress and summary information.
+       generate_ppa_profile (bool): If True, generates a baseload PPA profile; otherwise, loads from file.
+    """
+    #### INPUTS ####
     capacity = 40
     max_soc = 1  # Set to 1 for full capacity
     min_soc = 0  # Set to 0 for no minimum capacity
@@ -735,17 +808,17 @@ def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True,
     capacity_poi = 43.2
     max_charge_power = 10
     max_discharge_power = 10
-    charge_efficiency = 0.92
-    discharge_efficiency = 0.92
+    charge_efficiency = 0.92 #set sqrt of efficiency ie sqrt(0.92) for roundtrip efficiency
+    discharge_efficiency = 0.92 #set sqrt of efficiency ie sqrt(0.92) for roundtrip efficiency
     initial_energy = 0
-    transformer_losses = 0.004
-    battery_degradation_factor = 0.05 
-    
-    # Load data variables
-    generate_ppa_profile = True
-   
+    transformer_losses = 0.004  #set to None or 0 for no transformer losses
+    battery_degradation_factor = None  #None, you have to provide a degradation profile as "battery_degradation_profile.csv"
+    generate_ppa_profile = True #if false, you have to provide a ppa profile as "ppa_profile.csv" in the inputs folder with datetime (YYYY-MM-DD HH:MM:SS) and ppa_profile (in MW) columns
+    #### END INPUTS ####
+
+    #### PROCESSING ####
     for baseload_mw in baseload_mw_list:
-        if transformer_losses > 0:
+        if transformer_losses > 0 or transformer_losses is not None:
             capacity_poi = capacity_poi + (1*transformer_losses)
             baseload_mw = baseload_mw + (1*transformer_losses)
 
@@ -764,7 +837,7 @@ def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True,
             capacity_poi=capacity_poi,
             battery_degradation_factor=battery_degradation_factor
         )
-        minimizer.load_data(generate_ppa_profile, baseload_mw, start_date, end_date, verbose=verbose)
+        minimizer.load_data(generate_ppa_profile, baseload_mw,  start_date, end_date, transformer_losses, verbose=verbose)
 
         results = minimizer.optimize(minimizer.wind_profile, minimizer.solar_profile, minimizer.ppa_profile, timestamps=minimizer.timestamps, verbose=verbose)
 
@@ -781,6 +854,6 @@ def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True,
         PPADeficitMinimizer.consolidate_all_to_excel()
 
 if __name__ == "__main__":
-    main_baseload(baseload_mw_list=[5, 10, 15], consolidate_excel=True, start_date='2004-01-01', end_date='2005-12-31', verbose=False)
+    main_baseload(baseload_mw_list=[5], consolidate_excel=True, start_date='2004-01-01', end_date='2005-12-31', verbose=False)
 
     

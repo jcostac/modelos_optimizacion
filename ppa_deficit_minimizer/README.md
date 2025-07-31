@@ -1,4 +1,4 @@
-# PPA Deficit Minimizer (`v2_modelo_ppa_deficit.py`)
+# PPA Deficit Minimizer (`ppa_deficit_minimizer_v3.py` and `launcher.py`)
 
 This script optimizes the operation of a hybrid power plant, consisting of wind and solar generation sources along with a battery energy storage system (BESS). The primary goal is to minimize the deficit against a Power Purchase Agreement (PPA) target, while a secondary goal is to maximize the total energy injected into the grid.
 
@@ -11,7 +11,7 @@ The optimization is a two-phase linear programming problem:
 
 ### System Parameters
 
-The following system parameters are currently hardcoded within the `main_baseload` function. You can modify them there to suit different simulation scenarios.
+The following system parameters are defined in `config.py`. You can modify them there to suit different simulation scenarios.
 
 **Battery Storage (BESS) :**
 *   **Total Capacity:** 40 MWh
@@ -68,27 +68,20 @@ The script generates several output files in the `outputs/` directory for each P
 
 ## How to Run
 
-To execute the model, configure the parameters within the `if __name__ == "__main__":` block at the end of the script and run it from your terminal.
+To execute the model, configure the parameters in `config.py` and run `launcher.py` from your terminal:
 
-```python
-if __name__ == "__main__":
-    main_baseload(
-        baseload_mw_list=[5, 10, 15], 
-        consolidate_excel=True, 
-        start_date='2000-01-01', 
-        end_date='2000-12-31', 
-        verbose=False
-    )
+```sh
+python launcher.py
 ```
 
-### `main_baseload` Function Parameters
+The `launcher.py` script uses the configurations from `config.py` to run the simulations. Key configurations include:
 
-*   `baseload_mw_list` (list[float]): A list of flat, constant PPA targets (in MW) to simulate. The script will run once for each value in the list.
-*   `consolidate_excel` (bool): If `True`, the script will create the consolidated Excel file after all scenarios are complete (usefule for multiple scenarios)
-*   `start_date` (str | None): The start date for filtering the input data. Format: `'YYYY-MM-DD'`. If `None`, we use the entire dataset time period
-*   `end_date` (str | None): The end date for filtering the input data. Format: `'YYYY-MM-DD'`. If `None`, we use the entire dataset time period
-*   `verbose` (bool): If `True`, the script will print detailed logs, model parameters, and optimization progress. Recommended for debugging or single runs. Set to `False` for faster batch processing.
-*   `generate_ppa_profile` (bool): This is set to `True` inside `main_baseload`. This tells the script to generate a flat PPA profile based on the values in `baseload_mw_list`. If you set it to `False`, the script will attempt to load `inputs/ppa_profile.csv` instead.
+- `BASELOAD_MW_LIST`: List of baseload MW values to simulate.
+- `CONSOLIDATE_EXCEL`: Whether to create a consolidated Excel file.
+- `START_DATE` and `END_DATE`: Date range for data filtering.
+- `VERBOSE`: Enable detailed logging.
+
+For more details, see the `main_baseload` function in `launcher.py`.
 
 ## Prerequisites
 
