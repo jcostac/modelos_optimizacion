@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 import config
 from ppa_deficit_minimizer.data_handler import DataHandler
 from ppa_deficit_minimizer.results_handler import ResultsHandler
-from ppa_deficit_minimizer.ppa_deficit_minimizer_v3 import PPADeficitMinimizer
+from models.ppa_deficit_minimizer_v3 import PPADeficitMinimizer
 
 def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True, start_date: str = None, end_date: str = None, verbose: bool = True):
     """
