@@ -14,7 +14,7 @@ from config import INPUTS_PATH, OUTPUTS_PATH
 
 class PPADeficitMinimizer:
     
-    def __init__(self, max_capacity, min_capacity, max_charge_power, max_discharge_power, charge_efficiency, discharge_efficiency, initial_energy, capacity_poi):
+    def __init__(self, max_capacity, min_capacity, max_charge_power, max_discharge_power, charge_efficiency, discharge_efficiency, initial_energy, capacity_poi, battery_degradation_factor):
         """
         Initialize ppa_deficit minimizer for a hybrid system with wind and solar generation.
         
@@ -35,9 +35,10 @@ class PPADeficitMinimizer:
         self.charge_efficiency = charge_efficiency
         self.discharge_efficiency = discharge_efficiency
         self.initial_energy = initial_energy
-        self.capacity_poi = capacity_poi
+        self.capacity_poi = capacity_poi 
+        self.battery_degradation_factor = battery_degradation_factor
 
-    def optimize(self, wind: list[float], solar: list[float], ppa: list[float], verbose: bool = False) -> dict:
+    def optimize(self, wind: list[float], solar: list[float], ppa: list[float], timestamps: list[datetime.datetime] = None, verbose: bool = False) -> dict:
         """
         Optimize battery charge/discharge to minimize unmet PPA.
         
@@ -71,20 +72,30 @@ class PPADeficitMinimizer:
         model = pyo.ConcreteModel()
         model.T = pyo.RangeSet(0, T - 1)
 
-        # Parameters
-        model.W = pyo.Param(model.T, initialize=dict(enumerate(wind)), within=pyo.NonNegativeReals, doc='Wind production [MW]')
-        model.S = pyo.Param(model.T, initialize=dict(enumerate(solar)), within=pyo.NonNegativeReals, doc='Solar production [MW]')
-        model.PPA = pyo.Param(model.T, initialize=dict(enumerate(ppa)), within=pyo.NonNegativeReals, doc='PPA profile [MW]')
+        #scalar parameters
         model.P_grid_max = pyo.Param(initialize=self.capacity_poi, within=pyo.NonNegativeReals, doc='Max grid injection limit [MW]')
         model.P_chg_max = pyo.Param(initialize=self.max_charge_power, within=pyo.NonNegativeReals, doc='Max charge power [MW]')
         model.P_dis_max = pyo.Param(initialize=self.max_discharge_power, within=pyo.NonNegativeReals, doc='Max discharge power [MW]')
         model.eta_c = pyo.Param(initialize=self.charge_efficiency, within=pyo.NonNegativeReals, doc='Charge efficiency')
         model.eta_d = pyo.Param(initialize=self.discharge_efficiency, within=pyo.NonNegativeReals, doc='Discharge efficiency')
         model.SoC_min = pyo.Param(initialize=self.min_capacity, within=pyo.NonNegativeReals, doc='Min state-of-charge [MWh]')
-        model.SoC_max = pyo.Param(initialize=self.max_capacity, within=pyo.NonNegativeReals, doc='Max state-of-charge [MWh]')
         model.SoC_0 = pyo.Param(initialize=self.initial_energy, within=pyo.NonNegativeReals, doc='Initial state-of-charge [MWh]')
-        model.Delta_t = pyo.Param(initialize=1, within=pyo.NonNegativeReals, doc='Time step [h]') #used to convert charge and discharge rates in MW to energy rates in MWh
+        model.Delta_t = pyo.Param(initialize=1, within=pyo.NonNegativeReals, doc='Time step [h]') #used to convert charge and discharge rates in MW to energy rates in MWh (useful to convert ranularity of the data)
+        
+        # Validate that Delta_t matches the input data granularity
+        if timestamps is not None:
+            self._validate_granularity(timestamps, pyo.value(model.Delta_t), verbose=verbose)
+        
+        # Pre-calculate degraded capacity values
+        soc_max_values = self._calculate_degraded_capacity(timestamps, T)
 
+        #time-dependent parameters
+        model.SoC_max = pyo.Param(model.T, initialize=soc_max_values, within=pyo.NonNegativeReals, doc='Max state-of-charge [MWh]')
+        model.W = pyo.Param(model.T, initialize=dict(enumerate(wind)), within=pyo.NonNegativeReals, doc='Wind production [MW]')
+        model.S = pyo.Param(model.T, initialize=dict(enumerate(solar)), within=pyo.NonNegativeReals, doc='Solar production [MW]')
+        model.PPA = pyo.Param(model.T, initialize=dict(enumerate(ppa)), within=pyo.NonNegativeReals, doc='PPA profile [MW]')
+
+        
         # Decision variables
         model.c = pyo.Var(model.T, bounds=(0, self.max_charge_power), within=pyo.NonNegativeReals, doc='Charge power [MW]')
         model.d = pyo.Var(model.T, bounds=(0, self.max_discharge_power), within=pyo.NonNegativeReals, doc='Discharge power [MW]')
@@ -110,7 +121,7 @@ class PPADeficitMinimizer:
             """
             if t == 0:
                 return pyo.Constraint.Skip
-            return pyo.inequality(m.SoC_min, m.SoC[t], m.SoC_max)
+            return pyo.inequality(m.SoC_min, m.SoC[t], m.SoC_max[t])
         model.soc_limits = pyo.Constraint(model.T, rule=soc_limits_rule)
 
         def power_balance_rule(m, t):
@@ -199,6 +210,97 @@ class PPADeficitMinimizer:
             
         return {'results': res}
     
+    def _calculate_degraded_capacity(self, timestamps: list[datetime.datetime], T: int) -> dict:
+        """
+        Calculates time-dependent maximum capacity after applying annual degradation.
+        This is more efficient than updating a mutable Pyomo parameter in a loop.
+
+        Args:
+            timestamps: List of timestamps
+            T: Length of the time series
+
+        Returns:
+            dict: Mapping of time step (year) to degraded capacity ie {0: 100, 1: 99, 2: 98, ...}
+        """
+        if self.battery_degradation_factor == 0.0:
+            return {t: self.max_capacity for t in range(T)}
+
+        if self.battery_degradation_factor > 0.0 and not timestamps:
+            raise ValueError("Timestamps must be provided for battery degradation.")
+
+        if len(timestamps) != T:
+            raise ValueError("Timestamps must match the length of input data.")
+
+        timestamps_pd = pd.to_datetime(timestamps)
+        years = timestamps_pd.year
+        start_year = years.min()
+
+        # Create a mapping from year to degradation factor
+        degradation_map = {
+            year: (1 - self.battery_degradation_factor) ** (year - start_year)
+            for year in years.unique()
+        }
+
+        # Create the final dictionary mapping each time step `t` to its degraded capacity
+        degraded_capacity_dict = {
+            t: self.max_capacity * degradation_map[years[t]]
+            for t in range(T)
+        }
+        
+        return degraded_capacity_dict
+
+    def _validate_granularity(self, timestamps, delta_t_hours, verbose=False):
+        """
+        Validates that the Delta_t parameter matches the actual time granularity of the input data.
+        
+        Args:
+            timestamps: List of timestamps from input data
+            delta_t_hours: Delta_t value in hours
+            
+        Raises:
+            ValueError: If Delta_t doesn't match the data granularity
+        """
+        if len(timestamps) < 2:
+            print("Warning: Cannot validate granularity with less than 2 timestamps.")
+            return
+            
+        timestamps_pd = pd.to_datetime(timestamps)
+        
+        # Calculate the actual time differences between consecutive timestamps
+        time_diffs = timestamps_pd[1:] - timestamps_pd[:-1]
+        
+        # Convert to hours. .dt accessor is not needed for TimedeltaIndex.
+        actual_delta_hours = time_diffs.total_seconds() / 3600
+
+        # Find the most frequent time step (mode) to handle minor data gaps gracefully.
+        delta_series = pd.Series(actual_delta_hours).round(6) # Round to avoid float precision issues
+        
+        if delta_series.empty:
+            print("Warning: Not enough data to determine granularity.")
+            return
+
+        actual_granularity = delta_series.mode()[0]
+        
+        # Warn if multiple time steps are found, but proceed with the mode.
+        unique_deltas = delta_series.unique()
+        if len(unique_deltas) > 1 and verbose:
+            print(f"Warning: Inconsistent time steps found. Proceeding with most frequent: {actual_granularity:.4f} hours.")
+            print(f"  Detected steps (hours): {np.round(unique_deltas, 4)}")
+        
+        # Allow small floating point tolerance (1 second = ~0.0003 hours)
+        tolerance = 0.001  # hours
+        
+        if abs(actual_granularity - delta_t_hours) > tolerance:
+            raise ValueError(
+                f"Granularity mismatch!\n"
+                f"  • Input data granularity: {actual_granularity:.4f} hours ({actual_granularity*60:.1f} minutes)\n"
+                f"  • Model Delta_t setting:  {delta_t_hours:.4f} hours ({delta_t_hours*60:.1f} minutes)\n"
+                f"  • Please adjust Delta_t to match your input data granularity."
+            )
+        
+        if verbose:
+            print(f"✅ Granularity check passed: {actual_granularity:.4f} hours ({actual_granularity*60:.1f} minutes)")
+
     def select_solver(self, verbose=False):
             """
             Try different solvers in order of preference and return the first available one.
@@ -626,21 +728,27 @@ class PPADeficitMinimizer:
 def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True, start_date: str = None, end_date: str = None, verbose: bool = True, generate_ppa_profile: bool = True):
     # Variables
     capacity = 40
-    max_soc = 0.95  # Set to 1 for full capacity
-    min_soc = 0.05  # Set to 0 for no minimum capacity
+    max_soc = 1  # Set to 1 for full capacity
+    min_soc = 0  # Set to 0 for no minimum capacity
     max_capacity = capacity * max_soc
     min_capacity = capacity * min_soc
     capacity_poi = 43.2
-    max_charge_power = 9
-    max_discharge_power = 9
-    charge_efficiency = np.sqrt(0.9)
-    discharge_efficiency = np.sqrt(0.9)
+    max_charge_power = 10
+    max_discharge_power = 10
+    charge_efficiency = 0.92
+    discharge_efficiency = 0.92
     initial_energy = 0
+    transformer_losses = 0.004
+    battery_degradation_factor = 0.05 
     
     # Load data variables
     generate_ppa_profile = True
    
     for baseload_mw in baseload_mw_list:
+        if transformer_losses > 0:
+            capacity_poi = capacity_poi + (1*transformer_losses)
+            baseload_mw = baseload_mw + (1*transformer_losses)
+
         if verbose:
             print(f"\n🎯 Processing baseload scenario: {baseload_mw} MW")
             
@@ -653,11 +761,12 @@ def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True,
             charge_efficiency=charge_efficiency,
             discharge_efficiency=discharge_efficiency,
             initial_energy=initial_energy,
-            capacity_poi=capacity_poi
+            capacity_poi=capacity_poi,
+            battery_degradation_factor=battery_degradation_factor
         )
         minimizer.load_data(generate_ppa_profile, baseload_mw, start_date, end_date, verbose=verbose)
 
-        results = minimizer.optimize(minimizer.wind_profile, minimizer.solar_profile, minimizer.ppa_profile, verbose=verbose)
+        results = minimizer.optimize(minimizer.wind_profile, minimizer.solar_profile, minimizer.ppa_profile, timestamps=minimizer.timestamps, verbose=verbose)
 
         deficits = minimizer.compute_deficits(results['results'], minimizer.ppa_profile, minimizer.timestamps)
 
@@ -672,6 +781,6 @@ def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True,
         PPADeficitMinimizer.consolidate_all_to_excel()
 
 if __name__ == "__main__":
-    main_baseload(baseload_mw_list=[5, 10, 15], consolidate_excel=True, start_date='2004-01-01', end_date='2004-12-31', verbose=False)
+    main_baseload(baseload_mw_list=[5, 10, 15], consolidate_excel=True, start_date='2004-01-01', end_date='2005-12-31', verbose=False)
 
     
