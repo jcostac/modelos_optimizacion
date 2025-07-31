@@ -250,7 +250,7 @@ class PPADeficitMinimizer:
         
         return {'deficits': {'hourly': hourly, 'monthly': monthly['%_deficit'].to_dict()}}
 
-    def load_data(self, generate_ppa_profile: bool = False, baseload_mw: float = None, start_date: str = None, end_date: str = None):
+    def load_data(self, generate_ppa_profile: bool = False, baseload_mw: float = None, start_date: str = None, end_date: str = None, verbose=False):
         """
         Load data from the inputs folder. Can handle missing wind or solar profiles.
         Assumes CSVs have a datetime column as the first column and a value column as the second.
@@ -273,7 +273,7 @@ class PPADeficitMinimizer:
                 df = pd.read_csv(path)
                 df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)
                 df['datetime'] = pd.to_datetime(df['datetime'])
-                df['datetime'] = df['datetime'].dt.floor('H') #extract hour
+                df['datetime'] = df['datetime'].dt.floor('h') #extract hour
                 return df
             print(f"Info: '{os.path.basename(path)}' not found. Assuming zero generation for this source.")
             return None
@@ -295,9 +295,9 @@ class PPADeficitMinimizer:
                 solar_df = solar_df[(solar_df['datetime'] >= start) & (solar_df['datetime'] < end)].reset_index(drop=True)
 
         if wind_df is not None:
-            self.check_complete_years(wind_df, 'wind')
+            self.check_complete_years(wind_df, 'wind', verbose=verbose)
         if solar_df is not None:
-            self.check_complete_years(solar_df, 'solar')
+            self.check_complete_years(solar_df, 'solar', verbose=verbose)
 
         if wind_df is not None and solar_df is not None and len(wind_df) != len(solar_df):
             raise ValueError("Wind and solar profiles have different lengths after date filtering. Please check input files.")
@@ -359,7 +359,7 @@ class PPADeficitMinimizer:
         
         return [baseload_mw] * profile_length
 
-    def check_complete_years(self, df, profile_name):
+    def check_complete_years(self, df, profile_name, verbose=False):
         """
         Checks if the data for each month in each year is complete (has the correct number of hours).
         Warns if any hours are missing and lists the missing hours.
@@ -367,6 +367,7 @@ class PPADeficitMinimizer:
         Args:
             df (pd.DataFrame): DataFrame with a 'datetime' column.
             profile_name (str): Name of the profile being checked (e.g., 'wind', 'solar').
+            verbose (bool): Whether to print the missing hours.
         """
         if df is None or df.empty:
             return
@@ -393,12 +394,12 @@ class PPADeficitMinimizer:
                 # Create a set of all expected datetimes for this month
                 start = pd.Timestamp(year=year, month=month, day=1, hour=0)
                 end = pd.Timestamp(year=year, month=month, day=days_in_month, hour=23)
-                all_hours = pd.date_range(start=start, end=end, freq='H')
+                all_hours = pd.date_range(start=start, end=end, freq='h')
                 # Get the datetimes present in the DataFrame for this year/month
                 present_hours = set(df[(df['year'] == year) & (df['month'] == month)]['datetime'])
                 # Find missing datetimes
                 missing_datetimes = sorted(list(set(all_hours) - present_hours))
-                if missing_datetimes:
+                if missing_datetimes and verbose:
                     print(f"  Missing hours for {year}-{month:02d}:")
                     for dt in missing_datetimes:
                         print(f"    - {dt.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -654,7 +655,7 @@ def main_baseload(baseload_mw_list: list[float], consolidate_excel: bool = True,
             initial_energy=initial_energy,
             capacity_poi=capacity_poi
         )
-        minimizer.load_data(generate_ppa_profile, baseload_mw, start_date, end_date)
+        minimizer.load_data(generate_ppa_profile, baseload_mw, start_date, end_date, verbose=verbose)
 
         results = minimizer.optimize(minimizer.wind_profile, minimizer.solar_profile, minimizer.ppa_profile, verbose=verbose)
 
