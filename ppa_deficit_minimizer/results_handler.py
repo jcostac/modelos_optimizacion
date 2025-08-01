@@ -111,13 +111,13 @@ class ResultsHandler:
 
         avg_ppa_profile = str(int(round(np.mean(self.data.ppa_profile))))
         
-        self._save_to_csv(df_hourly_final, f"consolidated_results_hourly_{avg_ppa_profile}MW.csv")
+        self._save_to_csv(df_hourly_final, f"results_hourly_{avg_ppa_profile}MW.csv")
 
         # Create and save monthly summary (with sums for accurate % deficit)
         if 'monthly' in deficits_data:
             df_monthly = pd.DataFrame(list(deficits_data['monthly'].items()), columns=['month', '%_deficit'])
             df_monthly['month'] = df_monthly['month'].astype(str)
-            self._save_to_csv(df_monthly, f"consolidated_results_monthly_{avg_ppa_profile}MW.csv")
+            self._save_to_csv(df_monthly, f"results_monthly_{avg_ppa_profile}MW.csv")
 
         # Save summary data
         summary_data = {k: v for k, v in results_data.items() if not isinstance(v, list)}
@@ -140,7 +140,7 @@ class ResultsHandler:
         Consolidate all existing hourly CSV files in outputs folder into a single Excel file.
         Each CSV becomes a sheet named 'Baseload XMW' where X is the average PPA value.
         """
-        csv_pattern = f"{OUTPUTS_PATH}/consolidated_results_hourly_*MW.csv"
+        csv_pattern = f"{OUTPUTS_PATH}/results_hourly_*MW.csv"
         csv_files = glob.glob(csv_pattern)
         
         if not csv_files:
@@ -150,7 +150,8 @@ class ResultsHandler:
         excel_path = f"{OUTPUTS_PATH}/{excel_filename}"
         
         with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-            for csv_file in sorted(csv_files):
+            for csv_file in sorted(csv_files, reverse=True):
+                
                 filename = os.path.basename(csv_file)
                 try:
                     baseload_mw = filename.split('_')[-1].replace('MW.csv', '')

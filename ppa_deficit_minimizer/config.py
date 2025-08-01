@@ -44,9 +44,9 @@ BATTERY_DEGRADATION_FACTOR = None
 # EXECUTION PARAMETERS
 # ------------------------------------------------------------------------------
 # List of baseload scenarios to run in MW.
-BASELOAD_MW_LIST = [5]
+BASELOAD_MW_LIST = [5,10]
 
-# If True, consolidates all hourly results into a single Excel file.
+# If True, consolidates all hourly CSV results into a single Excel file.
 CONSOLIDATE_EXCEL = True
 
 # Optional start and end dates for filtering input data (format 'YYYY-MM-DD').

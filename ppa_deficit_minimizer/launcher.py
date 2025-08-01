@@ -96,3 +96,4 @@ if __name__ == "__main__":
         end_date=config.END_DATE, 
         verbose=config.VERBOSE
     ) 
+
