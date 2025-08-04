@@ -127,7 +127,7 @@ class ResultsHandler:
         summary_data = {k: v for k, v in results_data.items() if not isinstance(v, list)}
         if summary_data:
             df_summary = pd.DataFrame([summary_data])
-            self._save_to_csv(df_summary, f"results_summary_{filename_suffix}.csv")
+            self._save_to_csv(df_summary, f"results_totals_{filename_suffix}.csv")
 
         self._calculate_and_save_yearly_deficit_summary(df_hourly_final, filename_suffix)
         self._calculate_and_save_per_hour_summary(df_hourly_final, filename_suffix)
@@ -166,11 +166,11 @@ class ResultsHandler:
             pct_energy_deficit = (total_energy_deficit / total_production) * 100 if total_production > 0 else 0
             
             yearly_summary.append({
-                'Year': year,
-                'Deficit Hours': n_hours_deficit,
-                'Deficit Hours %': pct_hours_deficit,
-                'Deficit Energy (MWh)': total_energy_deficit,
-                'Deficit Energy %': pct_energy_deficit
+                'year': year,
+                'deficit_hours': n_hours_deficit,
+                '%_deficit_hours': pct_hours_deficit,
+                'deficit_energy': total_energy_deficit,
+                '%_deficit_energy': pct_energy_deficit
             })
 
         if not yearly_summary:
@@ -180,11 +180,12 @@ class ResultsHandler:
         df_summary = pd.DataFrame(yearly_summary)
         
         # Rounding for presentation
-        df_summary['Deficit Hours %'] = df_summary['Deficit Hours %'].round(1)
-        df_summary['Deficit Energy (MWh)'] = df_summary['Deficit Energy (MWh)'].round(2)
-        df_summary['Deficit Energy %'] = df_summary['Deficit Energy %'].round(1)
+        df_summary['deficit_hours'] = df_summary['deficit_hours'].round(1)
+        df_summary['deficit_energy'] = df_summary['deficit_energy'].round(2)
+        df_summary['%_deficit_energy'] = df_summary['%_deficit_energy'].round(1)
+        df_summary['%_deficit_hours'] = df_summary['%_deficit_hours'].round(1)
 
-        self._save_to_csv(df_summary, f"results_yearly_deficit_summary_{filename_suffix}.csv")
+        self._save_to_csv(df_summary, f"summary_yearly_deficit_{filename_suffix}.csv")
 
     def _calculate_and_save_per_hour_summary(self, df_hourly: pd.DataFrame, filename_suffix: str):
         """
@@ -213,15 +214,15 @@ class ResultsHandler:
         # Format for presentation
         hourly_summary = hourly_summary.round({
             'production': 2,
-            ('deficit', '%'): 2,
-            ('deficit', 'energy'): 2,
-            ('deficit', '%_energy'): 1,
-            ('excess', '%'): 2,
-            ('excess', 'energy'): 2,
-            ('excess', '%_energy'): 1,
+            'deficit_%': 2,
+            'deficit_energy': 2,
+            '%_deficit_energy': 1,
+            'excess_%': 2,
+            'excess_energy': 2,
+            '%_excess_energy': 1,
         })
         
-        self._save_to_csv(hourly_summary, f"results_per_hour_summary_{filename_suffix}.csv")
+        self._save_to_csv(hourly_summary, f"summary_per_hour_{filename_suffix}.csv")
 
     @staticmethod
     def _calculate_hourly_metrics(group):
@@ -247,14 +248,14 @@ class ResultsHandler:
         data = {
             'production': total_production,
             'total_hours': total_hours_of_type,
-            ('deficit', 'hours'): deficit_hours,
-            ('deficit', '%'): pct_deficit_hours,
-            ('deficit', 'energy'): deficit_energy,
-            ('deficit', '%_energy'): pct_deficit_energy,
-            ('excess', 'hours'): excess_hours,
-            ('excess', '%'): pct_excess_hours,
-            ('excess', 'energy'): excess_energy,
-            ('excess', '%_energy'): pct_excess_energy,
+            'deficit_hours': deficit_hours,
+            '%_deficit_hours': pct_deficit_hours,
+            'deficit_energy': deficit_energy,
+            '%_deficit_energy': pct_deficit_energy,
+            'excess_hours': excess_hours,
+            '%_excess_hours': pct_excess_hours,
+            'excess_energy': excess_energy,
+            '%_excess_energy': pct_excess_energy,
         }
         return pd.Series(data)
 

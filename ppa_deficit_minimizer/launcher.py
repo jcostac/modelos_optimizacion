@@ -120,7 +120,7 @@ def main(baseload_mw_list: list[float] = None, seasonal_json_list: list[str] = N
             )
             # Calculate peak MW from the loaded profile
             peak_mw = max(data_handler.ppa_profile)
-            scenario_name = f"custom_{Path(csv_filename).stem}_{peak_mw:.1f}MW"
+            scenario_name = f"preloaded_{peak_mw:.1f}MW"
         
         if verbose:
             print(f"   📊 Peak MW: {peak_mw:.1f}")
