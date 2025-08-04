@@ -8,8 +8,6 @@ import datetime
 sys.path.append(str(Path(__file__).parent.parent))
 
 import config
-from ppa_deficit_minimizer.data_handler import DataHandler
-from ppa_deficit_minimizer.results_handler import ResultsHandler
 
 class PPADeficitMinimizer:
     

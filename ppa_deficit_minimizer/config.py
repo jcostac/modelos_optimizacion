@@ -48,7 +48,7 @@ BATTERY_DEGRADATION_FACTOR = None
 BASELOAD_MW_LIST = [5,10]
 
 # List of seasonal PPA scenarios to run, if GENERATE_SEASONAL_PPA_PROFILE is True.
-SEASONAL_PPA_JSON_LIST = ['ppa_input_example.json', "ppa_input_2.json"] #list of json files with the same structure as ppa_input_example.json
+SEASONAL_PPA_JSON_LIST = ['ppa_input_1.json', "ppa_input_2.json", "ppa_input_3.json", "ppa_input_4.json", "ppa_input_5.json", "ppa_input_6.json"] #list of json files with the same structure as ppa_input_example.json
 
 #default is 8-20 which are solar hours 
 PEAK_START_HOUR = 8 #hour of the day to start the peak period (inclusive)
@@ -64,8 +64,8 @@ CONSOLIDATE_EXCEL = True
 
 # Optional start and end dates for filtering input data (format 'YYYY-MM-DD').
 # Set to None to use all available data.
-START_DATE = '2004-01-01'
-END_DATE = '2004-12-31'
+START_DATE = None
+END_DATE = None
 
 # If True, prints detailed progress and summary information during the run.
 VERBOSE = False

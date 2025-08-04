@@ -94,10 +94,15 @@ class ResultsHandler:
         df_hourly["ppa_excess"] = df_hourly['wind+solar+bat'] - df_hourly['ppa_profile']
         df_hourly["ppa_excess"] = df_hourly["ppa_excess"].clip(lower=0)
 
+        #timecols
+        df_hourly["hour"] = df_hourly["datetime"].dt.hour
+        df_hourly["year"] = df_hourly["datetime"].dt.year
+        df_hourly["month"] = df_hourly["datetime"].dt.month
+
         # Select columns
         final_hourly_cols = [
-            'datetime', 'wind', 'solar_pv', "produccion", 'ppa_profile',  'soc', 
-            'net_charge', 'vertido_after', 'total_grid_injection', 'ppa_deficit', 'ppa_excess', 'curtailment', '%_deficit'
+            'datetime', "year", "month", "hour", 'wind', 'solar_pv', "produccion", 'ppa_profile',  'soc', 
+            'net_charge', 'ppa_deficit', 'ppa_excess', 'curtailment', '%_deficit'
         ]
         final_hourly_cols = [col for col in final_hourly_cols if col in df_hourly.columns]
         df_hourly_final = df_hourly[final_hourly_cols].copy()
