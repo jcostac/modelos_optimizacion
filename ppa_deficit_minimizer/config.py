@@ -48,9 +48,11 @@ BATTERY_DEGRADATION_FACTOR = None
 BASELOAD_MW_LIST = [5,10]
 
 # List of seasonal PPA scenarios to run, if GENERATE_SEASONAL_PPA_PROFILE is True.
-SEASONAL_PPA_JSON_LIST = ['ppa_input_example.json'] #list of json files with the same structure as ppa_input_example.json
-PEAK_START_HOUR = 8 #hour of the day to start the peak period
-PEAK_END_HOUR = 20 #hour of the day to end the peak period
+SEASONAL_PPA_JSON_LIST = ['ppa_input_example.json', "ppa_input_2.json"] #list of json files with the same structure as ppa_input_example.json
+
+#default is 8-20 which are solar hours 
+PEAK_START_HOUR = 8 #hour of the day to start the peak period (inclusive)
+PEAK_END_HOUR = 20 #hour of the day to end the peak period (NOT inclusive)
 
 # List of preloaded PPA CSV files to run scenarios for, if USE_PRELOADED_PPA_PROFILES is True.
 # These files should be located in the inputs folder and follow the same format as other CSV profiles.

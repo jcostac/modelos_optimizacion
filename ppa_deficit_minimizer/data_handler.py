@@ -24,6 +24,7 @@ class DataHandler:
         self.ppa_profile = None
         self.timestamps = None
         self.battery_degradation_profile = None
+        self.profile_name = None 
 
     def load_data(self, generate_ppa_profile: bool = False, baseload_mw: float = None, transformer_losses: float = 0, generate_seasonal_ppa: bool = False, seasonal_json_filename: str = None, preloaded_ppa_filename: str = None, peak_start: int = 8, peak_end: int = 20):
         """
@@ -203,15 +204,20 @@ class DataHandler:
         with open(json_path, 'r') as f:
             data = json.load(f)
         
+        # Store the profile name from JSON
+        self.profile_name = data.get('profile_name', 'seasonal_ppa')
+        
         month_name_to_num = {
             'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
             'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
         }
         
-        if set(data.keys()) != set(month_name_to_num.keys()):
-            raise ValueError("Seasonal PPA JSON must contain exactly the 12 month keys.")
+        # Check that all required month keys are present (allow additional keys like 'profile_name')
+        missing_months = set(month_name_to_num.keys()) - set(data.keys())
+        if missing_months:
+            raise ValueError(f"Seasonal PPA JSON is missing required month keys: {missing_months}")
         
-        num_to_values = {month_name_to_num[m]: data[m] for m in data}
+        num_to_values = {month_name_to_num[m]: data[m] for m in month_name_to_num.keys()}
         
         ppa_profile = []
         for ts in self.timestamps:
@@ -219,7 +225,7 @@ class DataHandler:
             hour = ts.hour
             try:
                 values = num_to_values[month]
-                power = values['peak'] if peak_start <= hour <= peak_end else values['off_peak']
+                power = values['peak'] if peak_start <= hour < peak_end else values['off_peak']
             except KeyError:
                 raise ValueError(f"Missing data for month {month}")
             if transformer_losses > 0:

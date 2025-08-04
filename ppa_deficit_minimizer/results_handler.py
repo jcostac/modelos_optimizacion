@@ -87,17 +87,17 @@ class ResultsHandler:
         df_hourly = df_hourly.rename(columns={'state_of_charge': 'soc'})
         df_hourly['net_charge'] = df_hourly['charge'] - df_hourly['discharge']
 
-        df_hourly['wind + pv'] = df_hourly['wind'] + df_hourly['solar_pv']
-        df_hourly['vertido_before'] = df_hourly['wind'] + df_hourly['solar_pv'] - capacity_poi
-        df_hourly['vertido_before'] = df_hourly['vertido_before'].clip(lower=0)
-        df_hourly['total_generation'] = df_hourly['wind'] + df_hourly['solar_pv'] + df_hourly['net_charge']
-        df_hourly = df_hourly.rename(columns={'curtailment': 'vertido_after'})
+        df_hourly['produccion'] = df_hourly['wind'] + df_hourly['solar_pv']
+        #df_hourly['vertido_before'] = df_hourly['wind'] + df_hourly['solar_pv'] - capacity_poi
+        #df_hourly['vertido_before'] = df_hourly['vertido_before'].clip(lower=0)
+        df_hourly['wind+solar+bat'] = df_hourly['wind'] + df_hourly['solar_pv'] + df_hourly['net_charge']
+        df_hourly["ppa_excess"] = df_hourly['wind+solar+bat'] - df_hourly['ppa_profile']
+        df_hourly["ppa_excess"] = df_hourly["ppa_excess"].clip(lower=0)
 
         # Select columns
         final_hourly_cols = [
-            'datetime', 'wind', 'solar_pv', "wind + pv", 'ppa_profile', 'vertido_before',  'soc', 
-            'net_charge', "total_generation", 'vertido_after', 'total_grid_injection', 'ppa_deficit', 'curtailment', '%_deficit', 
-            'total_ppa_deficit'
+            'datetime', 'wind', 'solar_pv', "produccion", 'ppa_profile',  'soc', 
+            'net_charge', 'vertido_after', 'total_grid_injection', 'ppa_deficit', 'ppa_excess', 'curtailment', '%_deficit'
         ]
         final_hourly_cols = [col for col in final_hourly_cols if col in df_hourly.columns]
         df_hourly_final = df_hourly[final_hourly_cols].copy()
@@ -128,6 +128,135 @@ class ResultsHandler:
         if summary_data:
             df_summary = pd.DataFrame([summary_data])
             self._save_to_csv(df_summary, f"results_summary_{filename_suffix}.csv")
+
+        self._calculate_and_save_yearly_deficit_summary(df_hourly_final, filename_suffix)
+        self._calculate_and_save_per_hour_summary(df_hourly_final, filename_suffix)
+
+    def _calculate_and_save_yearly_deficit_summary(self, df_hourly: pd.DataFrame, filename_suffix: str):
+        """
+        Calculates and saves a yearly summary of deficit metrics.
+        """
+        df = df_hourly.copy()
+        if 'datetime' not in df.columns:
+            print("Yearly summary not created: 'datetime' column not found.")
+            return
+
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        df['year'] = df['datetime'].dt.year
+
+        yearly_summary = []
+        
+        for year in sorted(df['year'].unique()):
+            df_year = df[df['year'] == year]
+            
+            hours_in_year = len(df_year)
+            if hours_in_year == 0:
+                continue
+                
+            n_hours_deficit = (df_year['ppa_deficit'] > 1e-4).sum()
+            pct_hours_deficit = (n_hours_deficit / hours_in_year) * 100
+            
+            total_energy_deficit = df_year['ppa_deficit'].sum()
+            
+            if 'net_charge' in df_year.columns:
+                total_production = (df_year['wind'] + df_year['solar_pv'] + df_year['net_charge']).sum()
+            else:
+                total_production = (df_year['wind'] + df_year['solar_pv']).sum()
+
+            pct_energy_deficit = (total_energy_deficit / total_production) * 100 if total_production > 0 else 0
+            
+            yearly_summary.append({
+                'Year': year,
+                'Deficit Hours': n_hours_deficit,
+                'Deficit Hours %': pct_hours_deficit,
+                'Deficit Energy (MWh)': total_energy_deficit,
+                'Deficit Energy %': pct_energy_deficit
+            })
+
+        if not yearly_summary:
+            print("No data to generate yearly deficit summary.")
+            return
+            
+        df_summary = pd.DataFrame(yearly_summary)
+        
+        # Rounding for presentation
+        df_summary['Deficit Hours %'] = df_summary['Deficit Hours %'].round(1)
+        df_summary['Deficit Energy (MWh)'] = df_summary['Deficit Energy (MWh)'].round(2)
+        df_summary['Deficit Energy %'] = df_summary['Deficit Energy %'].round(1)
+
+        self._save_to_csv(df_summary, f"results_yearly_deficit_summary_{filename_suffix}.csv")
+
+    def _calculate_and_save_per_hour_summary(self, df_hourly: pd.DataFrame, filename_suffix: str):
+        """
+        Calculates and saves a summary of deficit and excess per hour of the day.
+        """
+        df = df_hourly.copy()
+        if 'datetime' not in df.columns:
+            print("Per-hour summary not created: 'datetime' column not found.")
+            return
+
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        df['hour'] = df['datetime'].dt.hour
+
+        if 'net_charge' in df.columns:
+            df['produccion'] = df['wind'] + df['solar_pv'] + df['net_charge']
+        else:
+            df['produccion'] = df['wind'] + df['solar_pv']
+
+        # Group by hour of the day and calculate metrics
+        hourly_summary = df.groupby('hour').apply(self._calculate_hourly_metrics).reset_index()
+
+        if hourly_summary.empty:
+            print("No data to generate per-hour deficit/excess summary.")
+            return
+        
+        # Format for presentation
+        hourly_summary = hourly_summary.round({
+            'production': 2,
+            ('deficit', '%'): 2,
+            ('deficit', 'energy'): 2,
+            ('deficit', '%_energy'): 1,
+            ('excess', '%'): 2,
+            ('excess', 'energy'): 2,
+            ('excess', '%_energy'): 1,
+        })
+        
+        self._save_to_csv(hourly_summary, f"results_per_hour_summary_{filename_suffix}.csv")
+
+    @staticmethod
+    def _calculate_hourly_metrics(group):
+        """Helper to calculate metrics for each hourly group."""
+        total_hours_of_type = len(group)
+        if total_hours_of_type == 0:
+            return None
+        
+        total_production = group['produccion'].sum()
+
+        # Deficit
+        deficit_hours = (group['ppa_deficit'] > 1e-4).sum()
+        pct_deficit_hours = (deficit_hours / total_hours_of_type) * 100
+        deficit_energy = group['ppa_deficit'].sum()
+        pct_deficit_energy = (deficit_energy / total_production) * 100 if total_production > 0 else 0
+
+        # Excess
+        excess_hours = (group['ppa_excess'] > 1e-4).sum()
+        pct_excess_hours = (excess_hours / total_hours_of_type) * 100
+        excess_energy = group['ppa_excess'].sum()
+        pct_excess_energy = (excess_energy / total_production) * 100 if total_production > 0 else 0
+
+        data = {
+            'production': total_production,
+            'total_hours': total_hours_of_type,
+            ('deficit', 'hours'): deficit_hours,
+            ('deficit', '%'): pct_deficit_hours,
+            ('deficit', 'energy'): deficit_energy,
+            ('deficit', '%_energy'): pct_deficit_energy,
+            ('excess', 'hours'): excess_hours,
+            ('excess', '%'): pct_excess_hours,
+            ('excess', 'energy'): excess_energy,
+            ('excess', '%_energy'): pct_excess_energy,
+        }
+        return pd.Series(data)
 
     def _save_to_csv(self, data, filename: str):
         """Helper to save to CSV."""
