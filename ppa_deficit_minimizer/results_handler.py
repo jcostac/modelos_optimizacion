@@ -55,7 +55,7 @@ class ResultsHandler:
         
         return {'deficits': {'hourly': hourly, 'monthly': monthly_grouped['%_deficit'].to_dict()}}
 
-    def save_results(self, results: dict, deficits: dict, capacity_poi: float):
+    def save_results(self, results: dict, deficits: dict, capacity_poi: float, scenario_name: str = None):
         """
         Save results and deficits to the outputs folder.
         - Consolidated hourly time-series to consolidated_results_hourly.csv.
@@ -109,21 +109,25 @@ class ResultsHandler:
         
         df_hourly_final['datetime'] = pd.to_datetime(df_hourly_final['datetime'])
 
-        avg_ppa_profile = str(int(round(np.mean(self.data.ppa_profile))))
+        if scenario_name is None:
+            peak_ppa_profile = str(int(round(np.max(self.data.ppa_profile))))
+            filename_suffix = f"{peak_ppa_profile}MW"
+        else:
+            filename_suffix = scenario_name
         
-        self._save_to_csv(df_hourly_final, f"results_hourly_{avg_ppa_profile}MW.csv")
+        self._save_to_csv(df_hourly_final, f"results_hourly_{filename_suffix}.csv")
 
         # Create and save monthly summary (with sums for accurate % deficit)
         if 'monthly' in deficits_data:
             df_monthly = pd.DataFrame(list(deficits_data['monthly'].items()), columns=['month', '%_deficit'])
             df_monthly['month'] = df_monthly['month'].astype(str)
-            self._save_to_csv(df_monthly, f"results_monthly_{avg_ppa_profile}MW.csv")
+            self._save_to_csv(df_monthly, f"results_monthly_{filename_suffix}.csv")
 
         # Save summary data
         summary_data = {k: v for k, v in results_data.items() if not isinstance(v, list)}
         if summary_data:
             df_summary = pd.DataFrame([summary_data])
-            self._save_to_csv(df_summary, f"results_summary_{avg_ppa_profile}MW.csv")
+            self._save_to_csv(df_summary, f"results_summary_{filename_suffix}.csv")
 
     def _save_to_csv(self, data, filename: str):
         """Helper to save to CSV."""
@@ -150,14 +154,10 @@ class ResultsHandler:
         excel_path = f"{OUTPUTS_PATH}/{excel_filename}"
         
         with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-            for csv_file in sorted(csv_files, reverse=True):
+            for csv_file in sorted(csv_files, key=lambda x: os.path.basename(x)):
                 
                 filename = os.path.basename(csv_file)
-                try:
-                    baseload_mw = filename.split('_')[-1].replace('MW.csv', '')
-                    sheet_name = f"Baseload {baseload_mw}MW"
-                except IndexError:
-                    sheet_name = os.path.splitext(filename)[0]
+                sheet_name = filename.replace('results_hourly_', '').replace('.csv', '')
 
                 df = pd.read_csv(csv_file)
                 df.to_excel(writer, sheet_name=sheet_name, index=False)

@@ -25,7 +25,7 @@ class DataHandler:
         self.timestamps = None
         self.battery_degradation_profile = None
 
-    def load_data(self, generate_ppa_profile: bool = False, baseload_mw: float = None, transformer_losses: float = 0):
+    def load_data(self, generate_ppa_profile: bool = False, baseload_mw: float = None, transformer_losses: float = 0, generate_seasonal_ppa: bool = False, seasonal_json_filename: str = None, preloaded_ppa_filename: str = None, peak_start: int = 8, peak_end: int = 20):
         """
         Load data from the inputs folder. Can handle missing wind or solar profiles.
         Assumes CSVs have a datetime column as the first column and a value column as the second.
@@ -35,12 +35,21 @@ class DataHandler:
             generate_ppa_profile (bool): Whether to generate a baseload profile or use a specific PPA profile
             baseload_mw (float): Constant baseload value in MW for generated profile.
             transformer_losses (float): Transformer losses to be added to the PPA profile.
+            generate_seasonal_ppa (bool): Whether to generate a seasonal PPA profile from JSON.
+            seasonal_json_filename (str): Filename of the seasonal PPA JSON file (expected in inputs folder).
+            preloaded_ppa_filename (str): Filename of the preloaded PPA CSV file (expected in inputs folder).
+            peak_start (int): Start hour for peak period (inclusive, 0-23).
+            peak_end (int): End hour for peak period (inclusive, 0-23).
         """
         paths = {
             'wind_profile': f'{INPUTS_PATH}/wind_profile.csv',
             'solar_profile': f'{INPUTS_PATH}/solar_profile.csv',
             'ppa_profile': f'{INPUTS_PATH}/ppa_profile.csv',
         }
+
+        # If a specific preloaded PPA filename is provided, update the path
+        if preloaded_ppa_filename:
+            paths['ppa_profile'] = f'{INPUTS_PATH}/{preloaded_ppa_filename}'
 
         def _load_profile(path):
             if os.path.exists(path):
@@ -86,16 +95,19 @@ class DataHandler:
         self.wind_profile = wind_df.iloc[:, 1].tolist() if wind_df is not None else [0.0] * profile_length
         self.solar_profile = solar_df.iloc[:, 1].tolist() if solar_df is not None else [0.0] * profile_length
 
-        if generate_ppa_profile:
-            self.ppa_profile = self.create_baseload_ppa(baseload_mw, profile_length)
+        if generate_seasonal_ppa:
+            self.ppa_profile = self.create_seasonal_ppa(seasonal_json_filename, peak_start, peak_end, transformer_losses)
+        elif generate_ppa_profile:
+            self.ppa_profile = self.create_baseload_ppa(baseload_mw, profile_length, transformer_losses)
         else:
             if not os.path.exists(paths['ppa_profile']):
-                raise FileNotFoundError(f"PPA profile not found at {paths['ppa_profile']}. To generate a baseload profile, set generate_ppa_profile=True.")
+                filename = preloaded_ppa_filename or 'ppa_profile.csv'
+                raise FileNotFoundError(f"PPA profile not found at {paths['ppa_profile']}. Please ensure {filename} exists in the inputs folder.")
             
             ppa_df = _load_profile(paths['ppa_profile'])
 
             if transformer_losses > 0 and transformer_losses is not None:
-                ppa_df.iloc[:, 1] = ppa_df.iloc[:, 1] + (1*transformer_losses)
+                ppa_df.iloc[:, 1] *= (1 + transformer_losses)
             
             # Align PPA with generation data timestamps
             ppa_df = ppa_df.set_index('datetime').reindex(ref_df['datetime']).reset_index()
@@ -146,21 +158,73 @@ class DataHandler:
             print("No battery degradation profile file found and BATTERY_DEGRADATION_FACTOR is not set. Assuming no degradation.")
             self.battery_degradation_profile = None
 
-    def create_baseload_ppa(self, baseload_mw, profile_length):
+    def create_baseload_ppa(self, baseload_mw, profile_length, transformer_losses=0):
         """
         Create a baseload PPA profile with constant value.
         
         Args:
             baseload_mw (float): Constant baseload value in MW
             profile_length (int): The length of the profile to generate.
+            transformer_losses (float): Transformer losses to be added to the baseload value.
             
         Returns:
-            list: PPA profile with constant baseload value
+            list: PPA profile with constant baseload value (including transformer losses)
         """
         if baseload_mw is None:
             raise ValueError("Baseload value must be provided when generating a PPA profile.")
         
-        return [baseload_mw] * profile_length
+        # Apply transformer losses to the baseload value
+        adjusted_baseload = baseload_mw * (1 + transformer_losses) if transformer_losses > 0 else baseload_mw
+        
+        return [adjusted_baseload] * profile_length
+
+    def create_seasonal_ppa(self, seasonal_json_filename, peak_start, peak_end, transformer_losses):
+        """
+        Create a seasonal PPA profile based on monthly peak/off-peak values from JSON.
+        
+        Args:
+            seasonal_json_filename (str): Filename of the JSON file with monthly peak/off-peak MW, found in the inputs folder.
+            peak_start (int): Start hour for peak period (inclusive).
+            peak_end (int): End hour for peak period (inclusive).
+            transformer_losses (float): Transformer losses factor.
+            
+        Returns:
+            list: Generated PPA profile matching timestamps.
+        """
+        import json
+        if not self.timestamps:
+            raise ValueError("Timestamps must be set before generating seasonal PPA.")
+        
+        json_path = os.path.join(INPUTS_PATH, seasonal_json_filename)
+        if not os.path.exists(json_path):
+            raise FileNotFoundError(f"Seasonal PPA JSON file not found: {json_path}")
+
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+        
+        month_name_to_num = {
+            'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+            'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+        }
+        
+        if set(data.keys()) != set(month_name_to_num.keys()):
+            raise ValueError("Seasonal PPA JSON must contain exactly the 12 month keys.")
+        
+        num_to_values = {month_name_to_num[m]: data[m] for m in data}
+        
+        ppa_profile = []
+        for ts in self.timestamps:
+            month = ts.month
+            hour = ts.hour
+            try:
+                values = num_to_values[month]
+                power = values['peak'] if peak_start <= hour <= peak_end else values['off_peak']
+            except KeyError:
+                raise ValueError(f"Missing data for month {month}")
+            if transformer_losses > 0:
+                power *= (1 + transformer_losses)
+            ppa_profile.append(power)
+        return ppa_profile
 
     def check_complete_years(self, df, profile_name, verbose=False):
         """

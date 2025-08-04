@@ -29,9 +29,10 @@ INITIAL_ENERGY_MWH = 0  # Starting energy in the battery [MWh]
 CAPACITY_POI = 43.2  # Max grid injection limit [MW]
 TRANSFORMER_LOSSES = 0.004 # As a decimal (e.g., 0.4% is 0.004). Set to 0 or None for no losses.
 
-# If True, a baseload PPA profile will be generated.
-# If False, a 'ppa_profile.csv' must be present in the inputs folder.
-GENERATE_PPA_PROFILE = True
+# PPA Profile Type Selection - Choose exactly ONE of the following:
+GENERATE_FLAT_PPA_PROFILE = False  # Generate constant baseload profiles
+GENERATE_SEASONAL_PPA_PROFILE = False  # Generate seasonal profiles from JSON
+USE_PRELOADED_PPA_PROFILES = True  # Use pre-existing CSV profiles from inputs folder
 
 # ------------------------------------------------------------------------------
 # DEGRADATION PARAMETERS
@@ -43,8 +44,18 @@ BATTERY_DEGRADATION_FACTOR = None
 # ------------------------------------------------------------------------------
 # EXECUTION PARAMETERS
 # ------------------------------------------------------------------------------
-# List of baseload scenarios to run in MW.
+# List of baseload scenarios to run in MW, if GENERATE_FLAT_PPA_PROFILE is True.
 BASELOAD_MW_LIST = [5,10]
+
+# List of seasonal PPA scenarios to run, if GENERATE_SEASONAL_PPA_PROFILE is True.
+SEASONAL_PPA_JSON_LIST = ['ppa_input_example.json'] #list of json files with the same structure as ppa_input_example.json
+PEAK_START_HOUR = 8 #hour of the day to start the peak period
+PEAK_END_HOUR = 20 #hour of the day to end the peak period
+
+# List of preloaded PPA CSV files to run scenarios for, if USE_PRELOADED_PPA_PROFILES is True.
+# These files should be located in the inputs folder and follow the same format as other CSV profiles.
+PRELOADED_PPA_PROFILES_LIST = ['ppa_profile.csv']
+
 
 # If True, consolidates all hourly CSV results into a single Excel file.
 CONSOLIDATE_EXCEL = True
