@@ -4,8 +4,8 @@
 # ==============================================================================
 # PATHS
 # ------------------------------------------------------------------------------
-INPUTS_PATH = 'ppa_deficit_minimizer/inputs'
-OUTPUTS_PATH = 'ppa_deficit_minimizer/outputs'
+INPUTS_PATH = 'inputs'
+OUTPUTS_PATH = 'outputs'
 # ------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
@@ -31,8 +31,8 @@ TRANSFORMER_LOSSES = 0.004 # As a decimal (e.g., 0.4% is 0.004). Set to 0 or Non
 
 # PPA Profile Type Selection - Choose exactly ONE of the following:
 GENERATE_FLAT_PPA_PROFILE = False  # Generate constant baseload profiles
-GENERATE_SEASONAL_PPA_PROFILE = False  # Generate seasonal profiles from JSON
-USE_PRELOADED_PPA_PROFILES = True  # Use pre-existing CSV profiles from inputs folder
+GENERATE_SEASONAL_PPA_PROFILE = True  # Generate seasonal profiles from JSON
+USE_PRELOADED_PPA_PROFILES = False # Use pre-existing CSV profiles from inputs folder
 
 # ------------------------------------------------------------------------------
 # DEGRADATION PARAMETERS

@@ -52,6 +52,7 @@ class DataHandler:
             paths['ppa_profile'] = f'{INPUTS_PATH}/{preloaded_ppa_filename}'
 
         def _load_profile(path):
+            print(f"Loading profile from {path}")
             if os.path.exists(path):
                 df = pd.read_csv(path)
                 df.rename(columns={df.columns[0]: 'datetime'}, inplace=True)

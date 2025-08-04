@@ -8,8 +8,8 @@ import datetime
 sys.path.append(str(Path(__file__).parent.parent))
 
 import config
-from ppa_deficit_minimizer.data_handler import DataHandler
-from ppa_deficit_minimizer.results_handler import ResultsHandler
+from data_handler import DataHandler
+from results_handler import ResultsHandler
 from models.ppa_deficit_minimizer_v3 import PPADeficitMinimizer
 
 def main(baseload_mw_list: list[float] = None, seasonal_json_list: list[str] = None, preloaded_ppa_list: list[str] = None, peak_start: int = 8, peak_end: int = 20, consolidate_excel: bool = True, start_date: str = None, end_date: str = None, verbose: bool = True):

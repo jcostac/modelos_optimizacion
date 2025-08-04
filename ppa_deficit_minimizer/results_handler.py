@@ -142,7 +142,7 @@ class ResultsHandler:
     def consolidate_all_to_excel(excel_filename: str = "consolidated_baseload_results.xlsx"):
         """
         Consolidate all existing hourly CSV files in outputs folder into a single Excel file.
-        Each CSV becomes a sheet named 'Baseload XMW' where X is the average PPA value.
+        Each CSV becomes a sheet named with type and profile identifier.
         """
         csv_pattern = f"{OUTPUTS_PATH}/results_hourly_*MW.csv"
         csv_files = glob.glob(csv_pattern)
@@ -157,8 +157,31 @@ class ResultsHandler:
             for csv_file in sorted(csv_files, key=lambda x: os.path.basename(x)):
                 
                 filename = os.path.basename(csv_file)
-                sheet_name = filename.replace('results_hourly_', '').replace('.csv', '')
-
+                scenario_name = filename.replace('results_hourly_', '').replace('.csv', '')
+                
+                # Parse scenario name to create sheet name
+                if scenario_name.startswith('flat_'):
+                    # Format: flat_5MW -> flat_5MW
+                    parts = scenario_name.split('_')
+                    peak_part = parts[-1]  # e.g., "5MW"
+                    peak_value = float(peak_part.replace('MW', ''))
+                    peak_rounded = int(round(peak_value))
+                    sheet_name = f"flat_{peak_rounded}MW"
+                    
+                elif scenario_name.startswith('seasonal_'):
+                    # New format with custom profile name
+                    profile_name = scenario_name.replace('seasonal_', '')
+                    sheet_name = f"seasonal_{profile_name}"
+                        
+                elif scenario_name.startswith('custom_'):
+                    # Format: custom_ppa_profile_15.3MW -> custom_15MW
+                    parts = scenario_name.split('_')
+                    peak_part = parts[-1]  # e.g., "15.3MW"
+                    peak_value = float(peak_part.replace('MW', ''))
+                    peak_rounded = int(round(peak_value))
+                    sheet_name = f"custom_{peak_rounded}MW"
+            
+                
                 df = pd.read_csv(csv_file)
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
                 print(f"Added sheet: {sheet_name}")
